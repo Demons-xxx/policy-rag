@@ -1,0 +1,30 @@
+{"id": "q01", "question": "科研经费报销中，单笔15万元的测试化验加工费需要哪一级审批？", "type": "direct", "expected_doc": "XX大学科研经费报销实施细则", "expected_article": "第十条", "expected_keywords": ["学院分管科研负责人|分管科研负责人"]}
+{"id": "q02", "question": "科研项目给研究生发劳务费，每人每月最高不超过多少元？", "type": "direct", "expected_doc": "XX大学科研经费报销实施细则", "expected_article": "第七条", "expected_keywords": ["2000元|2,000元"]}
+{"id": "q03", "question": "高级专业技术职称专家参加科研项目咨询，咨询费标准是多少？", "type": "direct", "expected_doc": "XX大学科研经费报销实施细则", "expected_article": "第八条", "expected_keywords": ["800元"]}
+{"id": "q04", "question": "在北京出差，科研经费报销的住宿费一天最多能报多少？", "type": "direct", "expected_doc": "XX大学科研经费报销实施细则", "expected_article": null, "expected_keywords": ["650元"]}
+{"id": "q05", "question": "教职工请假10个工作日，需要哪一级负责人审批？", "type": "direct", "expected_doc": "XX大学教职工请假与考勤管理规定", "expected_article": null, "expected_keywords": ["学院", "主要负责人"]}
+{"id": "q06", "question": "女教职工生育可以享受多少天产假？", "type": "direct", "expected_doc": "XX大学教职工请假与考勤管理规定", "expected_article": "第六条", "expected_keywords": ["158天"]}
+{"id": "q07", "question": "XX学院国家奖学金有多少个名额？", "type": "direct", "expected_doc": "XX学院学生奖学金评定办法", "expected_article": null, "expected_keywords": ["2名|2个名额|两名"]}
+{"id": "q08", "question": "学院评审后的奖学金拟获奖名单要在学院公示几个工作日？", "type": "direct", "expected_doc": "XX学院学生奖学金评定办法", "expected_article": "第十一条", "expected_keywords": ["5个工作日|5日"]}
+{"id": "q09", "question": "实验室里的危化品一次最多能领几天的量？", "type": "fuzzy", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第九条", "expected_keywords": ["3个工作日|三天|3天"], "forbidden_keywords": ["5个工作日"]}
+{"id": "q10", "question": "出差回来多久之内必须把报销单交上去？", "type": "fuzzy", "expected_doc": "XX大学科研经费报销实施细则", "expected_article": "第十一条", "expected_keywords": ["3个月|三个月"]}
+{"id": "q11", "question": "想请20天假，得找哪位领导批？", "type": "fuzzy", "expected_doc": "XX大学教职工请假与考勤管理规定", "expected_article": null, "expected_keywords": ["分管校领导"]}
+{"id": "q12", "question": "拿了国家奖学金，还能同时拿国家励志奖学金吗？", "type": "fuzzy", "expected_doc": "XX学院学生奖学金评定办法", "expected_article": "第七条", "expected_keywords": ["不可兼得|不能同时|不得同时"]}
+{"id": "q13", "question": "做实验出了事故，要多久、向谁报告？", "type": "fuzzy", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十八条", "expected_keywords": ["30分钟|半小时", "实验室与设备管理处"]}
+{"id": "q14", "question": "学校对危险化学品领用有哪些要求？", "type": "direct", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第九条", "expected_keywords": ["双人", "3个工作日|三天|3天"]}
+{"id": "q15", "question": "那实验结束后没用完的试剂怎么处理？", "type": "multi_turn", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第九条", "expected_keywords": ["退回|退还", "当日|当天"], "depends_on": "q14"}
+{"id": "q16", "question": "教职工请假要走哪些流程？", "type": "direct", "expected_doc": "XX大学教职工请假与考勤管理规定", "expected_article": "第八条", "expected_keywords": ["本人提出申请|本人申请", "审批"]}
+{"id": "q17", "question": "那请10个工作日的话，由谁审批？", "type": "multi_turn", "expected_doc": "XX大学教职工请假与考勤管理规定", "expected_article": null, "expected_keywords": ["学院", "主要负责人"], "depends_on": "q16"}
+{"id": "q18", "question": "用科研经费购买实验室危险化学品，采购和报销分别要遵守什么规定？", "type": "cross_doc", "expected_doc": ["XX大学实验室安全管理办法（2025年修订）", "XX大学科研经费报销实施细则"], "expected_article": null, "expected_keywords": ["统一采购", "报销"]}
+{"id": "q19", "question": "新入职教师进实验室前要培训多久？如果同时要请婚假，能请几天？", "type": "cross_doc", "expected_doc": ["XX大学实验室安全管理办法（2025年修订）", "XX大学教职工请假与考勤管理规定"], "expected_article": null, "expected_keywords": ["12学时|12个学时", "婚假"]}
+{"id": "q20", "question": "实验室安全工作和教职工请假考勤分别由哪个部门归口管理？", "type": "cross_doc", "expected_doc": ["XX大学实验室安全管理办法（2025年修订）", "XX大学教职工请假与考勤管理规定"], "expected_article": null, "expected_keywords": ["实验室与设备管理处", "人事处"]}
+{"id": "q21", "question": "科研项目给研究生发劳务费，和学院国家奖学金的金额标准分别是多少？", "type": "cross_doc", "expected_doc": ["XX大学科研经费报销实施细则", "XX学院学生奖学金评定办法"], "expected_article": null, "expected_keywords": ["2000元|2,000元", "8000元|8,000元"]}
+{"id": "q22", "question": "学生宿舍晚上几点熄灯？", "type": "refuse", "expected_doc": null, "expected_article": null, "expected_keywords": []}
+{"id": "q23", "question": "教师职称评审需要准备哪些材料？", "type": "refuse", "expected_doc": null, "expected_article": null, "expected_keywords": []}
+{"id": "q24", "question": "校园机动车通行证怎么办理？", "type": "refuse", "expected_doc": null, "expected_article": null, "expected_keywords": []}
+{"id": "q25", "question": "图书馆借书超期要交多少罚款？", "type": "refuse", "expected_doc": null, "expected_article": null, "expected_keywords": []}
+{"id": "q26", "question": "现在实验室危险化学品单次领用最多能用几天？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第九条", "expected_keywords": ["3个工作日|三天|3天"], "forbidden_keywords": ["5个工作日"]}
+{"id": "q27", "question": "新进实验室的人员要接受多少学时的安全培训？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十三条", "expected_keywords": ["12学时|12个学时"], "forbidden_keywords": ["8学时"]}
+{"id": "q28", "question": "实验室安全检查现在多久开展一次？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十六条", "expected_keywords": ["每日|每天", "每周", "每月"], "forbidden_keywords": ["每季度"]}
+{"id": "q29", "question": "实验室发生安全事故后，多长时间内要报告学校？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十八条", "expected_keywords": ["30分钟|半小时"], "forbidden_keywords": ["2小时"]}
+{"id": "q30", "question": "《XX大学实验室安全管理办法》2023年版现在还有效吗？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第二十条", "expected_keywords": ["废止|失效|不再有效"]}

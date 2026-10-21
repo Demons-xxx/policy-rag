@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "updated_at": "2025-09-01",
+  "documents": [
+    {
+      "file": "XX大学实验室安全管理办法（2023年版）.pdf",
+      "title": "XX大学实验室安全管理办法",
+      "doc_no": "校发〔2023〕12号",
+      "version_label": "2023年版",
+      "effective_from": "2023-03-01",
+      "effective_to": "2025-08-31",
+      "department": "实验室与设备管理处",
+      "status": "superseded",
+      "doc_id": "doc-4922e477e522",
+      "format": "pdf",
+      "pages": 3,
+      "sha256": "4922e477e522b2a46307c9c7cfcc9ac5b0189582ff7a6042df212f1955ba997f",
+      "supersedes": null
+    },
+    {
+      "file": "XX大学实验室安全管理办法（2025年修订）.docx",
+      "title": "XX大学实验室安全管理办法（2025年修订）",
+      "doc_no": "校发〔2025〕27号",
+      "version_label": "2025年修订版",
+      "effective_from": "2025-09-01",
+      "effective_to": null,
+      "department": "实验室与设备管理处",
+      "status": "active",
+      "doc_id": "doc-b0fc30d3598e",
+      "format": "docx",
+      "pages": 1,
+      "sha256": "b0fc30d3598e760cba89114c1afd4e2151b65668e5d63263137b0e8abce584db",
+      "supersedes": "doc-4922e477e522"
+    },
+    {
+      "file": "XX大学科研经费报销实施细则.docx",
+      "title": "XX大学科研经费报销实施细则",
+      "doc_no": "校发〔2024〕38号",
+      "version_label": "2024年版",
+      "effective_from": "2024-05-01",
+      "effective_to": null,
+      "department": "教务处、科研院、财务处",
+      "status": "active",
+      "doc_id": "doc-09773b9ab828",
+      "format": "docx",
+      "pages": 1,
+      "sha256": "09773b9ab8281430f91ff20efa75d0222bd9469cc6b7637c0c9c094cee29d5dc",
+      "supersedes": null
+    },
+    {
+      "file": "XX大学教职工请假与考勤管理规定.md",
+      "title": "XX大学教职工请假与考勤管理规定",
+      "doc_no": "校人〔2024〕9号",
+      "version_label": "2024年版",
+      "effective_from": "2024-09-01",
+      "effective_to": null,
+      "department": "人事处",
+      "status": "active",
+      "doc_id": "doc-a11423d336ab",
+      "format": "md",
+      "pages": 1,
+      "sha256": "a11423d336ab098d460a6ee0adacaee3235a44bcb357c8213896bf0f94dde09c",
+      "supersedes": null
+    },
+    {
+      "file": "XX学院学生奖学金评定办法.docx",
+      "title": "XX学院学生奖学金评定办法",
+      "doc_no": "学院〔2024〕5号",
+      "version_label": "2024年版",
+      "effective_from": "2024-10-01",
+      "effective_to": null,
+      "department": "XX学院学生工作办公室",
+      "status": "active",
+      "doc_id": "doc-57b83c87c756",
+      "format": "docx",
+      "pages": 1,
+      "sha256": "57b83c87c75641f41b020cd3e3fa2a6efeb1ea5d8a6373246dca7f24ddfb688a",
+      "supersedes": null
+    }
+  ]
+}

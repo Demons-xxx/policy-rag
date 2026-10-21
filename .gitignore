@@ -1,0 +1,52 @@
+# 运行数据、模型与本地环境不入库
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/AGENTS.md
+!/requirements.txt
+!/.env.example
+!/app/
+!/web/
+!/knowledge/
+!/scripts/
+!/tests/
+!/docs/
+
+# 依赖与构建产物
+**/__pycache__/
+**/*.py[cod]
+**/node_modules/
+**/.venv/
+**/.cache/
+/web/dist/
+**/.vite/
+**/*.tsbuildinfo
+
+# 模型权重与向量资产
+/models/
+**/*.npz
+**/*.safetensors
+**/*.gguf
+**/*.bin
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+
+# 运行数据
+/data/
+/log/
+**/*.log
+**/*.pid
+
+# 本地密钥
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_ed25519
+**/~$*
+**/*.tmp
+**/*.zip
