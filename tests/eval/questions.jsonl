@@ -28,3 +28,13 @@
 {"id": "q28", "question": "实验室安全检查现在多久开展一次？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十六条", "expected_keywords": ["每日|每天", "每周", "每月"], "forbidden_keywords": ["每季度"]}
 {"id": "q29", "question": "实验室发生安全事故后，多长时间内要报告学校？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十八条", "expected_keywords": ["30分钟|半小时"], "forbidden_keywords": ["2小时"]}
 {"id": "q30", "question": "《XX大学实验室安全管理办法》2023年版现在还有效吗？", "type": "after_update", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第二十条", "expected_keywords": ["废止|失效|不再有效"]}
+{"id": "q31", "question": "在会议室预约使用管理办法（2026年修订）里，会议室要提前几个工作日预约？", "type": "after_update", "expected_doc": "XX大学会议室预约使用管理办法（2026年修订）", "expected_article": "第四条", "expected_keywords": ["3个工作日"], "forbidden_keywords": ["1个工作日"]}
+{"id": "q32", "question": "现在预约学校会议室需要提前多久？", "type": "fuzzy", "expected_doc": "XX大学会议室预约使用管理办法（2026年修订）", "expected_article": "第四条", "expected_keywords": ["3个工作日"], "forbidden_keywords": ["1个工作日"]}
+{"id": "q33", "question": "实验室里的气瓶应该怎么存放？", "type": "direct", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十二条", "expected_keywords": ["直立|固定", "分类", "远离热源"]}
+{"id": "q34", "question": "晚上一个人在实验室做实验允许吗？", "type": "fuzzy", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十条", "expected_keywords": ["审批|值守"], "forbidden_keywords": ["可以单人"]}
+{"id": "q35", "question": "实验室安全检查记录要保存多久？", "type": "direct", "expected_doc": "XX大学实验室安全管理办法（2025年修订）", "expected_article": "第十六条", "expected_keywords": ["3年|三年"]}
+{"id": "q36", "question": "国家奖学金的学业成绩排名和课程要求是什么？", "type": "direct", "expected_doc": "XX学院学生奖学金评定办法", "expected_article": "第五条", "expected_keywords": ["前10%|前百分之十", "不及格"]}
+{"id": "q37", "question": "国家励志奖学金一年发多少钱，名额有几个？", "type": "direct", "expected_doc": "XX学院学生奖学金评定办法", "expected_article": "第十三条", "expected_keywords": ["5000", "8"]}
+{"id": "q38", "question": "教职工全年事假最多能请多少天？", "type": "direct", "expected_doc": "XX大学教职工请假与考勤管理规定", "expected_article": "第四条", "expected_keywords": ["15个工作日|十五个工作日"]}
+{"id": "q39", "question": "会议室归口管理和实验室门禁准入分别由谁负责？", "type": "cross_doc", "expected_doc": ["XX大学会议室预约使用管理办法（2026年修订）", "XX大学实验室安全管理办法（2025年修订）"], "expected_keywords": ["校长办公室", "实验室"]}
+{"id": "q40", "question": "校园网账号怎么申请，宿舍报修找谁？", "type": "refuse", "expected_doc": null, "expected_keywords": []}
