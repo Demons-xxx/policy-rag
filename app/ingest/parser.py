@@ -1,9 +1,9 @@
-"""文档解析：PDF / DOCX / Markdown / 纯文本 → 统一的 pages 结构。
+"""文档解析：PDF / DOCX / Markdown / 纯文本 / HTML → 统一的 pages 结构。
 
 契约（docs/架构与接口.md 3.2）::
 
     parse_document(path) -> {
-        "format": "pdf" | "docx" | "md" | "txt",
+        "format": "pdf" | "docx" | "md" | "txt" | "html",
         "pages": [{"no": 1, "text": "..."}],
         "has_pdf": bool,
         "page_count": int,
@@ -12,9 +12,14 @@
 DOCX 额外返回 ``tables`` 与 ``blocks``：表格按 markdown 风格行写入 pages 文本，
 同时保留结构化行列，供 structure 生成 ``table_row`` 单元；``blocks`` 保留正文与
 表格的原始顺序，避免用文本行反推表格而错位。
+
+Stage 3 起解析器按扩展名注册在 ``app.ingest.registry.PARSE_REGISTRY``：
+``parse_document`` 只是查表后调用；本文件保留各格式的具体实现与常量，
+已有格式（PDF/DOCX/MD/TXT）的解析结果逐字不变，HTML 为新增格式。
 """
 from __future__ import annotations
 
+from html.parser import HTMLParser
 from pathlib import Path
 
 FORMAT_BY_SUFFIX = {
@@ -23,6 +28,8 @@ FORMAT_BY_SUFFIX = {
     ".md": "md",
     ".markdown": "md",
     ".txt": "txt",
+    ".html": "html",
+    ".htm": "html",
 }
 
 PARSER_NAME = {
@@ -30,6 +37,7 @@ PARSER_NAME = {
     "docx": "python-docx",
     "md": "text",
     "txt": "text",
+    "html": "html.parser",
 }
 
 SOURCE_SUFFIX = {
@@ -37,18 +45,15 @@ SOURCE_SUFFIX = {
     "docx": ".docx",
     "md": ".md",
     "txt": ".txt",
+    "html": ".html",
 }
 
 
 def detect_format(path: Path) -> str:
-    """按扩展名判断格式，未知格式抛出中文异常。"""
-    suffix = Path(path).suffix.lower()
-    fmt = FORMAT_BY_SUFFIX.get(suffix)
-    if fmt is None:
-        raise RuntimeError(
-            f"不支持的文件格式：{suffix or '（无扩展名）'}（仅支持 PDF/DOCX/MD/TXT）"
-        )
-    return fmt
+    """按扩展名判断格式（查注册表），未知格式抛出中文异常并列出支持列表。"""
+    from app.ingest.registry import format_for
+
+    return format_for(path)
 
 
 def _read_text(path: Path) -> str:
@@ -188,17 +193,98 @@ def _parse_text(path: Path, fmt: str) -> dict:
     }
 
 
+_HTML_SKIP_TAGS = {"head", "script", "style", "noscript", "template"}
+_HTML_BLOCK_TAGS = {
+    "p", "div", "br", "li", "ul", "ol", "tr", "table", "tbody", "thead",
+    "section", "article", "header", "footer", "blockquote", "pre",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+}
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """把 HTML 正文抽成纯文本行；表格单元格用 ``" | "`` 连接，便于结构识别表格行。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.lines: list[str] = []
+        self.buffer: list[str] = []
+        self.skip_depth = 0
+
+    def _flush(self) -> None:
+        text = "".join(self.buffer)
+        self.buffer = []
+        for raw in text.splitlines():
+            line = " ".join(raw.split())
+            if line:
+                self.lines.append(line)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = tag.lower()
+        if tag in _HTML_SKIP_TAGS:
+            self.skip_depth += 1
+            return
+        if self.skip_depth:
+            return
+        if tag in ("td", "th"):
+            current = "".join(self.buffer).rstrip()
+            if current and not current.endswith("|"):
+                self.buffer.append(" | ")
+            return
+        if tag in _HTML_BLOCK_TAGS:
+            self._flush()
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in _HTML_SKIP_TAGS:
+            self.skip_depth = max(0, self.skip_depth - 1)
+            return
+        if self.skip_depth:
+            return
+        if tag in _HTML_BLOCK_TAGS or tag == "tr":
+            self._flush()
+
+    def handle_data(self, data: str) -> None:
+        if not self.skip_depth:
+            self.buffer.append(data)
+
+    def text(self) -> str:
+        self.close()
+        self._flush()
+        return "\n".join(self.lines)
+
+
+def _parse_html(path: Path) -> dict:
+    raw = _read_text(path)
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(raw)
+        text = extractor.text()
+    except Exception as exc:
+        raise RuntimeError(f"HTML 解析失败：{exc}") from exc
+    return {
+        "format": "html",
+        "pages": [{"no": 1, "text": text}],
+        "has_pdf": False,
+        "page_count": 1,
+        "tables": [],
+        "blocks": [{"type": "paragraph", "text": line}
+                   for line in text.splitlines() if line.strip()],
+        "parser": PARSER_NAME["html"],
+    }
+
+
 def parse_document(path: Path) -> dict:
-    """解析一份文档，返回契约 3.2 规定的结构。"""
+    """解析一份文档（按注册表选择解析器），返回契约 3.2 规定的结构。"""
     path = Path(path)
     if not path.is_file():
         raise RuntimeError(f"文件不存在：{path}")
-    fmt = detect_format(path)
-    if fmt == "pdf":
-        return _parse_pdf(path)
-    if fmt == "docx":
-        return _parse_docx(path)
-    return _parse_text(path, fmt)
+    from app.ingest.registry import parser_for
+
+    return parser_for(path)(path)
 
 
 def source_suffix(fmt: str) -> str:

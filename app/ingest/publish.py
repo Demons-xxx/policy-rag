@@ -116,6 +116,11 @@ def _embedding_text(unit: dict, text: str) -> str:
     return f"{prefix}{text}".strip()
 
 
+def embedding_text(unit: dict, text: str) -> str:
+    """公开别名：片段的编码文本（``stages.chunk`` 与发布共用同一实现）。"""
+    return _embedding_text(unit, text)
+
+
 # ---------------------------------------------------------------- 向量
 def _l2_normalize(vectors: np.ndarray) -> np.ndarray:
     vectors = np.asarray(vectors, dtype=np.float32)
@@ -298,7 +303,7 @@ def publish_release(device: str | None = None, force_full: bool = False) -> dict
                     local_passages.append({
                         "unit_id": unit.get("id"),
                         "text": chunk["text"],
-                        "embedding_text": _embedding_text(unit, chunk["text"]),
+                        "embedding_text": embedding_text(unit, chunk["text"]),
                         "start": chunk["start"],
                         "end": chunk["end"],
                     })

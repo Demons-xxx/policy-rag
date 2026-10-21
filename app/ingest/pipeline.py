@@ -1,4 +1,12 @@
-"""入库流水线：单文档入库 + 上传任务调度。
+"""入库流水线：单文档入库 + 上传任务调度（薄包装层）。
+
+Stage 3 起真正的阶段编排在 ``app.ingest.stages``（parse → structure → quality →
+chunk → publish，可配置阶段列表）；本模块只保留原有公开函数，作为去重、
+catalog 生命周期、任务调度与进度回调的薄包装：
+
+- ``ingest_path``：sha256 去重 → ``stages.run_document`` → 返回文档记录；
+- ``submit_upload`` / ``run_job`` / ``job_status``：上传任务登记与状态查询；
+- 签名、返回结构、任务进度回调（phase/progress/message 取值）与旧实现一致。
 
 契约见 docs/架构与接口.md 3.5。所有路径取自 app.config，写文件统一 UTF-8、
 原子替换（``.tmp`` + ``os.replace``）。
@@ -6,69 +14,24 @@
 from __future__ import annotations
 
 import re
-import shutil
 import threading
 import time
 import uuid
 from pathlib import Path
 
 from app import config
-from app.ingest import parser as parser_module
-from app.ingest.common import (
-    now_iso,
-    read_json,
-    read_jsonl,
-    relative_path,
-    sha256_file,
-    write_json,
-    write_jsonl,
-)
-from app.ingest.quality import check_units
-from app.ingest.structure import build_units
-from app.store.catalog import STATUSES, Catalog
+from app.ingest import stages
+from app.ingest.common import read_json, read_jsonl, sha256_file
+from app.store.catalog import Catalog
 
-META_FIELDS = (
-    "title", "doc_no", "version_label", "effective_from", "effective_to",
-    "department", "status", "supersedes",
-)
+#: 契约 2.1 的登记字段（定义已移到 stages，这里保留旧名以兼容调用方）
+META_FIELDS = stages.META_FIELDS
 
-_TITLE_SKIP_PREFIX = ("第", "附件", "目录", "目 录", "附录", "#")
+#: 旧实现里的私有别名：外部若引用过仍可用
+_clean_meta = stages.clean_meta
+_guess_title = stages.guess_title
+
 _UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-
-
-def _clean_meta(meta: dict | None) -> dict:
-    """只保留契约字段，空字符串统一成 None。"""
-    meta = meta or {}
-    cleaned: dict = {}
-    for key in META_FIELDS:
-        value = meta.get(key)
-        if value is None:
-            cleaned[key] = None
-        else:
-            text = str(value).strip()
-            cleaned[key] = text or None
-    status = cleaned.get("status") or "active"
-    if status not in STATUSES:
-        raise ValueError(f"非法文档状态：{status}（允许 {', '.join(STATUSES)}）")
-    cleaned["status"] = status
-    return cleaned
-
-
-def _guess_title(parsed: dict, path: Path) -> str:
-    """从首页首个像标题的行猜制度名称，失败时用文件名。"""
-    for page in (parsed.get("pages") or [])[:1]:
-        for line in (page.get("text") or "").splitlines():
-            text = line.strip()
-            if len(text) < 3 or len(text) > 120:
-                continue
-            if text.startswith(_TITLE_SKIP_PREFIX):
-                continue
-            if text.startswith(("（", "(")):
-                continue
-            if text.endswith("。") and len(text) > 30:
-                continue
-            return text
-    return path.stem
 
 
 def _safe_name(name: str) -> str:
@@ -115,8 +78,37 @@ def _existing_result(catalog: Catalog, record: dict, sha256: str, job_id: str | 
     return result
 
 
+def _job_callback(job_id: str | None):
+    """把阶段事件翻译成任务表更新；消息与进度值沿用旧实现（10/40/65/90）。"""
+
+    def notify(name: str, when: str, state: dict) -> None:
+        path = Path(state.get("path") or "")
+        if when == "before":
+            if name == "parse":
+                _update_job(job_id, phase="parse", progress=10,
+                            message=f"正在解析：{path.name}")
+            elif name == "structure":
+                _update_job(job_id, phase="structure", progress=40,
+                            message=f"正在结构化：{path.name}")
+            elif name == "quality":
+                _update_job(job_id, phase="quality", progress=65,
+                            message=f"正在检查质量：{path.name}")
+        elif when == "after" and name == "publish":
+            result = state.get("result") or {}
+            _update_job(
+                job_id, progress=90,
+                message=f"入库完成：{result.get('title')}（{result.get('unit_count', 0)} 个知识单元）",
+            )
+
+    return notify
+
+
 def ingest_path(path: Path, meta: dict | None = None, job_id: str | None = None) -> dict:
-    """完整入库单份文档：复制原文 → 解析 → 结构化 → 质量检查 → 登记。"""
+    """完整入库单份文档：去重 → 复制原文 → 解析 → 结构化 → 质量检查 → 登记。
+
+    薄包装：sha256 去重与 catalog 生命周期在这里，阶段串联交给
+    ``stages.run_document``；签名、返回结构与任务进度回调与旧实现一致。
+    """
     config.ensure_dirs()
     path = Path(path)
     if not path.is_file():
@@ -128,84 +120,10 @@ def ingest_path(path: Path, meta: dict | None = None, job_id: str | None = None)
         existing = catalog.find_by_sha(sha256)
         if existing is not None:
             return _existing_result(catalog, existing, sha256, job_id)
-
-        cleaned = _clean_meta(meta)
-        fmt = parser_module.detect_format(path)
-        doc_id = f"doc-{sha256[:12]}"
-        doc_dir = config.DOCS_DIR / doc_id
-        doc_dir.mkdir(parents=True, exist_ok=True)
-
-        # 1) 复制原文
-        suffix = parser_module.source_suffix(fmt)
-        source_path = doc_dir / f"source{suffix}"
-        try:
-            shutil.copy2(path, source_path)
-        except OSError as exc:
-            raise RuntimeError(f"复制原文失败：{exc}") from exc
-
-        # 2) 解析
-        _update_job(job_id, phase="parse", progress=10, message=f"正在解析：{path.name}")
-        parsed = parser_module.parse_document(path)
-
-        # 3) 结构化
-        _update_job(job_id, phase="structure", progress=40, message=f"正在结构化：{path.name}")
-        title = cleaned.get("title") or _guess_title(parsed, path)
-        unit_meta = {
-            **cleaned,
-            "doc_id": doc_id,
-            "doc_title": title,
-            "file_name": path.name,
-        }
-        units = build_units(parsed, unit_meta)
-
-        # 4) 质量检查
-        _update_job(job_id, phase="quality", progress=65, message=f"正在检查质量：{path.name}")
-        issues = check_units(units, parsed)
-
-        # 5) 落盘登记
-        imported_at = now_iso()
-        record = {
-            "doc_id": doc_id,
-            "title": title,
-            "doc_no": cleaned.get("doc_no"),
-            "version_label": cleaned.get("version_label"),
-            "effective_from": cleaned.get("effective_from"),
-            "effective_to": cleaned.get("effective_to"),
-            "department": cleaned.get("department"),
-            "status": cleaned.get("status") or "active",
-            "supersedes": cleaned.get("supersedes"),
-            "file_name": path.name,
-            "format": fmt,
-            "pages": int(parsed.get("page_count") or len(parsed.get("pages") or []) or 1),
-            "has_pdf": 1 if parsed.get("has_pdf") else 0,
-            "sha256": sha256,
-            "source_path": relative_path(source_path),
-            "imported_at": imported_at,
-        }
-        meta_payload = dict(record)
-        meta_payload["unit_count"] = len(units)
-        meta_payload["parser"] = parsed.get("parser")
-        write_json(doc_dir / "meta.json", meta_payload)
-        write_jsonl(doc_dir / "units.jsonl", units)
-        write_json(doc_dir / "issues.json", {
-            "doc_id": doc_id,
-            "generated_at": imported_at,
-            "blocking": any(issue.get("blocking") for issue in issues),
-            "issues": issues,
-        })
-        catalog.upsert_document(record)
-        catalog.record_audit("ingest", doc_id=doc_id, job_id=job_id, detail={
-            "file": path.name, "format": fmt, "unit_count": len(units),
-            "issue_count": len(issues), "sha256": sha256,
-        })
-        _update_job(job_id, progress=90,
-                    message=f"入库完成：{title}（{len(units)} 个知识单元）")
-
-        result = dict(record)
-        result["issues"] = issues
-        result["unit_count"] = len(units)
-        result["deduplicated"] = False
-        return result
+        return stages.run_document(
+            path, meta, sha256=sha256, catalog=catalog, job_id=job_id,
+            on_stage=_job_callback(job_id),
+        )
     finally:
         catalog.close()
 

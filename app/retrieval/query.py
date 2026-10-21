@@ -6,29 +6,13 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 
+from app.core.text import normalize
 from app.retrieval.lexical import words
 
-# ---------------------------------------------------------------------------
-# 规范化
-# ---------------------------------------------------------------------------
-
-_ZERO_WIDTH = ('\u200b', '\u200c', '\u200d', '\ufeff')
+# 规范化实现在 app/core/text.py（通用文本工具），这里转出以兼容既有 import。
+# Stage 1 迁移时本文件删掉了本地 normalize，但 doc_no_key 仍需要空白正则。
 _WS_RE = re.compile(r'\s+')
-
-
-def normalize(text: str) -> str:
-    """NFKC 归一化：全角转半角、合并多余空白、去掉零宽字符。
-
-    注意：NFKC 不会把「〔〕」改成半角，因此文号匹配时另行统一括号。
-    """
-    if text is None:
-        return ''
-    value = unicodedata.normalize('NFKC', str(text))
-    for ch in _ZERO_WIDTH:
-        value = value.replace(ch, '')
-    return _WS_RE.sub(' ', value).strip()
 
 
 # ---------------------------------------------------------------------------

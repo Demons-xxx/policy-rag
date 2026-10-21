@@ -1,0 +1,128 @@
+"""排序与数量控制：旧版降权、章节导语降权、跨文档多样性、表格挂接占位、notes 合并。
+
+排序键与选择规则都是纯函数，输入融合记录与过滤结果，输出有序的 unit_id 列表。
+"""
+from __future__ import annotations
+
+from typing import Callable
+
+# 同标题旧版本降权但不驱逐：正常提问由现行版胜出，用户明确点名旧文号时旧版
+# 仍可能排前（同时会在 notes 提示）
+STALE_FACTOR = 0.7
+# 纯章节导语保留但压低权重，避免抢占正文位置
+HEADING_FACTOR = 0.8
+# 版本提示的入选门槛：旧版候选得分达到最佳证据的该比例才提示
+VERSION_NOTE_RATIO = 0.6
+# 跨文档换入门槛：另一份文档的最优候选得分需达到当前最佳的该比例
+DIVERSITY_RATIO = 0.5
+
+
+def dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def order_key(record: dict, unit_id: str, stale: bool, heading: bool) -> tuple:
+    score = float(record['rrf'])
+    if stale:
+        score *= STALE_FACTOR
+    if heading:
+        score *= HEADING_FACTOR
+    return (
+        -score,
+        1 if stale else 0,
+        1 if heading else 0,
+        -float(record['dense']),
+        -float(record['bm25']),
+        unit_id,
+    )
+
+
+def order_units(kept: list[str], records: dict[str, dict],
+                stale_ids: set[str], heading_flags: dict[str, bool]) -> list[str]:
+    """按「降权后 RRF → 新旧 → 是否导语 → 原始分 → id」稳定排序。"""
+    return sorted(
+        kept,
+        key=lambda unit_id: order_key(
+            records[unit_id],
+            unit_id,
+            unit_id in stale_ids,
+            bool(heading_flags.get(unit_id)),
+        ),
+    )
+
+
+def diversify_documents(ordered: list[str], top_k: int,
+                        unit_map: dict[str, dict],
+                        records: dict[str, dict]) -> list[str]:
+    """跨制度问题：前几名全来自同一文档时，用最后一个名额换入另一份文档的最优候选。"""
+    selection = list(ordered[:top_k])
+    if len(selection) >= 3:
+        selected_docs = {str(unit_map[uid].get('doc_id')) for uid in selection}
+        if len(selected_docs) == 1:
+            best_score = float(records[selection[0]]['rrf'])
+            for uid in ordered[top_k:]:
+                if str(unit_map[uid].get('doc_id')) in selected_docs:
+                    continue
+                if float(records[uid]['rrf']) >= best_score * DIVERSITY_RATIO:
+                    selection[-1] = uid
+                    break
+    return selection
+
+
+def fill_with_attached_rows(selection: list[str], ordered: list[str], top_k: int,
+                            unit_map: dict[str, dict],
+                            adjacent_rows: Callable[[dict], list[dict]]) -> list[str]:
+    """条款证据会带上紧邻的表格行；这些行不再单独占一个证据位。"""
+    chosen: list[str] = []
+    attached_rows: set[str] = set()
+    for uid in list(selection) + [item for item in ordered if item not in selection]:
+        if len(chosen) >= top_k:
+            break
+        if uid in attached_rows:
+            continue
+        chosen.append(uid)
+        unit = unit_map[uid]
+        if str(unit.get('kind') or '') == 'article':
+            for row in adjacent_rows(unit):
+                attached_rows.add(str(row.get('id')))
+    return chosen
+
+
+def best_selected_score(results: list[dict], records: dict[str, dict]) -> float:
+    best = 0.0
+    for item in results:
+        value = float(records[str(item['unit']['id'])]['rrf'])
+        if value > best:
+            best = value
+    return best
+
+
+def version_note_score_ok(score: float, best_selected: float,
+                          ratio: float = VERSION_NOTE_RATIO) -> bool:
+    """旧版候选与最佳证据得分接近时才提示，避免每次都附带版本说明。"""
+    if best_selected and score < best_selected * ratio:
+        return False
+    return True
+
+
+def note_over_budget(title: str, budget: int) -> str:
+    return f'《{title}》证据超出上下文预算（{budget} tokens），已省略'
+
+
+def merge_notes(version_notes: list[str], notes: list[str]) -> list[str]:
+    """版本提示放在预算提示之前，更符合阅读顺序。"""
+    return dedupe(version_notes) + dedupe(notes)
+
+
+__all__ = [
+    'STALE_FACTOR', 'HEADING_FACTOR', 'VERSION_NOTE_RATIO', 'DIVERSITY_RATIO',
+    'dedupe', 'order_key', 'order_units', 'diversify_documents',
+    'fill_with_attached_rows', 'best_selected_score', 'version_note_score_ok',
+    'note_over_budget', 'merge_notes',
+]

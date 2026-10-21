@@ -1,26 +1,56 @@
-"""集中配置：.env / 环境变量 / 默认值。所有路径都相对项目根目录。"""
+"""配置的模块级视图（兼容层）。
+
+真实来源是 `app.settings.Settings`；这里把字段展开成模块常量，方便既有代码
+继续写 `from app import config`。新代码建议直接使用 `load_settings()`。
+"""
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.settings import Settings, load_settings
 
+_settings: Settings = load_settings()
 
-def _load_env(path: Path) -> None:
-    """极简 .env 读取；已存在的环境变量优先。"""
-    if not path.is_file():
-        return
-    for raw in path.read_text(encoding='utf-8').splitlines():
-        line = raw.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, _, value = line.partition('=')
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+ROOT = _settings.root
 
+# ---- 目录 ----
+DATA_DIR = _settings.data_dir
+STATE_DIR = _settings.state_dir
+RELEASES_DIR = _settings.releases_dir
+DOCS_DIR = _settings.docs_dir
+JOBS_DIR = _settings.jobs_dir
+LOGS_DIR = _settings.logs_dir
+UPLOADS_DIR = _settings.uploads_dir
+VECTOR_DIR = _settings.vector_dir
+KNOWLEDGE_DIR = _settings.knowledge_dir
+MODELS_DIR = _settings.models_dir
+WEB_DIST = _settings.web_dist
 
-_load_env(ROOT / '.env')
+ACTIVE_RELEASE = _settings.active_release
+CATALOG_DB = _settings.catalog_db
+
+# ---- 模型与服务 ----
+LLM_BASE_URL = _settings.llm_base_url
+LLM_API_KEY = _settings.llm_api_key
+LLM_MODEL = _settings.llm_model
+# 推理型模型是否输出思考过程：disabled（默认）/ enabled / auto / none（不发送该参数）
+LLM_THINKING = _settings.llm_thinking
+VECTOR_BACKEND = _settings.vector_backend
+DEVICE = _settings.device
+HOST = _settings.host
+PORT = _settings.port
+EMBEDDING_DIR = _settings.embedding_dir
+
+# ---- 问答参数 ----
+TOP_K = _settings.top_k
+MAX_CONTEXT_TOKENS = _settings.max_context_tokens
+MAX_HISTORY_CHARS = _settings.max_history_chars
+MAX_HISTORY_MESSAGES = _settings.max_history_messages
+# 向量相关性闸门：最佳向量相似度低于该值时视为「知识库没有相关内容」，
+# 不拿低分结果凑证据；设 0 关闭。有条款号/文号等精确命中时不受该阈值限制。
+RETRIEVAL_MIN_DENSE = _settings.retrieval_min_dense
 
 
 def env(name: str, default: str = '') -> str:
@@ -28,48 +58,13 @@ def env(name: str, default: str = '') -> str:
     return default if value is None or value.strip() == '' else value.strip()
 
 
-# ---- 目录 ----
-DATA_DIR = ROOT / 'data'
-STATE_DIR = DATA_DIR / 'state'
-RELEASES_DIR = DATA_DIR / 'releases'
-DOCS_DIR = DATA_DIR / 'docs'
-JOBS_DIR = DATA_DIR / 'jobs'
-LOGS_DIR = DATA_DIR / 'logs'
-UPLOADS_DIR = DATA_DIR / 'uploads'
-VECTOR_DIR = DATA_DIR / 'vector_store'
-KNOWLEDGE_DIR = ROOT / 'knowledge'
-MODELS_DIR = ROOT / 'models'
-WEB_DIST = ROOT / 'web' / 'dist'
-
-ACTIVE_RELEASE = STATE_DIR / 'active_release.json'
-CATALOG_DB = STATE_DIR / 'catalog.sqlite'
-
-# ---- 模型与服务 ----
-LLM_BASE_URL = env('POLICYRAG_LLM_BASE_URL', 'http://127.0.0.1:8081/v1').rstrip('/')
-LLM_API_KEY = env('POLICYRAG_LLM_API_KEY', '')
-LLM_MODEL = env('POLICYRAG_LLM_MODEL', 'Qwen3.8-27B')
-# 推理型模型是否输出思考过程：disabled（默认，推荐）/ enabled / auto / none（不发送该参数）
-LLM_THINKING = env('POLICYRAG_LLM_THINKING', 'disabled').lower()
-VECTOR_BACKEND = env('POLICYRAG_VECTOR_BACKEND', 'chroma').lower()
-DEVICE = env('POLICYRAG_DEVICE', 'auto').lower()
-HOST = env('POLICYRAG_HOST', '127.0.0.1')
-PORT = int(env('POLICYRAG_PORT', '7880'))
-EMBEDDING_DIR = Path(env('POLICYRAG_EMBEDDING_DIR', str(MODELS_DIR / 'bge-base-zh-v1.5')))
-
-# ---- 问答参数 ----
-TOP_K = int(env('POLICYRAG_TOP_K', '5'))
-MAX_CONTEXT_TOKENS = int(env('POLICYRAG_MAX_CONTEXT_TOKENS', '4096'))
-MAX_HISTORY_CHARS = int(env('POLICYRAG_MAX_HISTORY_CHARS', '6000'))
-MAX_HISTORY_MESSAGES = int(env('POLICYRAG_MAX_HISTORY_MESSAGES', '12'))
-# 向量相关性闸门：最佳向量相似度低于该值时视为「知识库没有相关内容」，
-# 不拿低分结果凑证据；设 0 关闭。有条款号/文号等精确命中时不受该阈值限制。
-RETRIEVAL_MIN_DENSE = float(env('POLICYRAG_RETRIEVAL_MIN_DENSE', '0.45'))
+def settings() -> Settings:
+    """当前配置对象（只读）。"""
+    return _settings
 
 
 def ensure_dirs() -> None:
-    for path in (DATA_DIR, STATE_DIR, RELEASES_DIR, DOCS_DIR, JOBS_DIR, LOGS_DIR,
-                 UPLOADS_DIR, VECTOR_DIR):
-        path.mkdir(parents=True, exist_ok=True)
+    _settings.ensure_dirs()
 
 
 def project_info() -> dict:

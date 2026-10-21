@@ -50,3 +50,6 @@
 **/~$*
 **/*.tmp
 **/*.zip
+
+# 评测结果文件（每次运行生成）
+tests/eval/results-*.json
