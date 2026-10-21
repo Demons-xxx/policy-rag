@@ -28,7 +28,7 @@ COPY_FILES = [
     'domain/__init__.py', 'domain/versions.py',
     'retrieval/__init__.py', 'retrieval/encoder.py', 'retrieval/lexical.py',
     'retrieval/query.py', 'retrieval/engine.py', 'retrieval/channels.py',
-    'retrieval/fusion.py', 'retrieval/filters.py', 'retrieval/ranking.py',
+    'retrieval/fusion.py', 'retrieval/filters.py', 'retrieval/ranking.py', 'retrieval/planner.py',
     'retrieval/evidence.py',
     'retrieval/backends/__init__.py', 'retrieval/backends/npz.py',
     'retrieval/backends/chroma.py',

@@ -94,6 +94,38 @@ def fill_with_attached_rows(selection: list[str], ordered: list[str], top_k: int
     return chosen
 
 
+def enforce_quotas(selection: list[str], ordered: list[str],
+                   quotas: list[list[str]], top_k: int) -> list[str]:
+    """一句多问时保证每个子问题的最优证据至少占一个名额。
+
+    ``quotas`` 是每个子问题各自的高分单元（按子问题内得分从高到低）。
+    只认每个子问题的第一名：已入选就跳过，否则换掉全局排序里最靠后、
+    又不是其它子问题第一名的证据位。这样「采购」「报销」各自的最佳条款都会出现。
+    """
+    chosen = list(selection)
+    selected = set(chosen)
+    targets = [group[0] for group in quotas if group]
+    protected = set(targets)
+    for target in targets:
+        if target in selected:
+            continue
+        if len(chosen) < top_k:
+            chosen.append(target)
+            selected.add(target)
+            continue
+        victim = None
+        for uid in reversed(chosen):
+            if uid not in protected:
+                victim = uid
+                break
+        if victim is None:
+            continue
+        chosen[chosen.index(victim)] = target
+        selected.discard(victim)
+        selected.add(target)
+    return sorted(chosen, key=lambda uid: ordered.index(uid) if uid in ordered else len(ordered))
+
+
 def best_selected_score(results: list[dict], records: dict[str, dict]) -> float:
     best = 0.0
     for item in results:
@@ -123,6 +155,6 @@ def merge_notes(version_notes: list[str], notes: list[str]) -> list[str]:
 __all__ = [
     'STALE_FACTOR', 'HEADING_FACTOR', 'VERSION_NOTE_RATIO', 'DIVERSITY_RATIO',
     'dedupe', 'order_key', 'order_units', 'diversify_documents',
-    'fill_with_attached_rows', 'best_selected_score', 'version_note_score_ok',
+    'fill_with_attached_rows', 'enforce_quotas', 'best_selected_score', 'version_note_score_ok',
     'note_over_budget', 'merge_notes',
 ]

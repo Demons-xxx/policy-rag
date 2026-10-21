@@ -20,7 +20,7 @@ from typing import Callable
 
 from app import config
 from app.domain import versions as versioning
-from app.retrieval import channels, fusion, ranking
+from app.retrieval import channels, fusion, planner, ranking
 from app.retrieval import evidence as evidence_builder
 from app.retrieval import filters as stage_filters
 from app.retrieval.backends import create_backend
@@ -211,41 +211,100 @@ class PolicyRetriever:
         if self.backend_note:
             notes.append(self.backend_note)
 
+        # ---- 查询拆解：一句多问时按子句分别召回，再交错合并 ----
+        known_titles = [str(unit.get('doc_title') or '') for unit in self._doc_samples.values()]
+        # 拆解以「用户原话」为准：改写常把「分别/同时」抹平，单话题则沿用改写问句
+        plan = planner.plan_query(normalize(question) or rewritten, titles=known_titles)
+        sub_queries = list(plan.sub_queries) if plan.is_multi else [rewritten]
+        if plan.is_multi:
+            notes.append(f'问题包含 {len(sub_queries)} 个子问题，已分别检索后合并证据')
+
         self._emit(on_stage, 'query', {
             'question': question,
             'rewritten': rewritten,
+            'sub_queries': sub_queries if plan.is_multi else [],
             'filters': {'department': department_filter, 'as_of': as_of},
             'doc_no': parsed.get('doc_no'),
             'article': parsed.get('article'),
             'is_followup': parsed.get('is_followup'),
         })
 
-        # ---- 通道 1~2：BGE 向量 / BM25 ----
-        dense_hits, dense_note = channels.dense_candidates(
-            self.encoder, self._backend, rewritten, doc_filter,
-        )
-        if dense_note:
-            notes.append(dense_note)
+        # ---- 通道 1~6：每个子句跑一遍向量 / BM25 / 条款号 / 文号 / 章节 / 标题 ----
+        dense_groups: list[list[tuple[str, float]]] = []
+        keyword_groups: list[list[tuple[str, float]]] = []
+        exact_groups: dict[str, list[list[str]]] = {
+            name: [] for name in fusion.EXACT_CHANNELS}
+        for index, sub_query in enumerate(sub_queries):
+            if index == 0:
+                sub_parsed = parsed
+            else:
+                sub_parsed = parse_query(sub_query)
+                if filters.get('doc_no'):
+                    sub_parsed['doc_no'] = parsed['doc_no']
+                if filters.get('article'):
+                    sub_parsed['article'] = parsed.get('article')
+                    sub_parsed['article_no'] = parsed.get('article_no')
+
+            hits, dense_note = channels.dense_candidates(
+                self.encoder, self._backend, sub_query, doc_filter,
+            )
+            if dense_note:
+                notes.append(dense_note)
+            dense_groups.append(hits)
+
+            keyword_hits, keyword_note = channels.keyword_candidates(
+                self.bm25, self._passage_ids, sub_query,
+            )
+            if keyword_note:
+                notes.append(keyword_note)
+            keyword_groups.append(keyword_hits)
+
+            found = channels.exact_channels(self.units, self.unit_map, sub_parsed)
+            for name in fusion.EXACT_CHANNELS:
+                exact_groups[name].append(found.get(name) or [])
+
+        dense_hits = fusion.merge_hits(dense_groups)
+        keyword_hits = fusion.merge_hits(keyword_groups)
+        exact_channels = {
+            name: fusion.interleave(groups)
+            for name, groups in exact_groups.items() if any(groups)
+        }
+
+        # ---- 每个子句各自融合，再按单元累加 RRF（多子问题 = 多路召回求和）----
+        records: dict[str, dict] = {}
+        sub_ranked: list[list[str]] = []
+        for index in range(len(sub_queries)):
+            sub_records: dict[str, dict] = {}
+            dense_units = fusion.add_dense_candidates(
+                sub_records, dense_groups[index], self.passage_map, self.unit_map)
+            keyword_units = fusion.add_keyword_candidates(
+                sub_records, keyword_groups[index], self.passage_map, self.unit_map)
+            channel_lists: dict[str, list[str]] = {
+                'BGE': dense_units,
+                'BM25': keyword_units,
+            }
+            for name in fusion.EXACT_CHANNELS:
+                hits = exact_groups[name][index]
+                if hits:
+                    channel_lists[name] = hits
+            fusion.fuse(sub_records, channel_lists, self.unit_map, self.unit_passages)
+            fusion.merge_into(records, sub_records)
+            sub_ranked.append([
+                unit_id for unit_id, _ in sorted(
+                    sub_records.items(), key=lambda item: -float(item[1].get('rrf') or 0.0))
+            ])
+
         dense_ids = [pid for pid, _ in dense_hits]
         self._emit(on_stage, 'vectors', {
             'passage_count': len(dense_hits),
             'titles': evidence_builder.labels_for_passages(
                 dense_ids, self.passage_map, self.unit_map, 5),
         })
-
-        keyword_hits, keyword_note = channels.keyword_candidates(
-            self.bm25, self._passage_ids, rewritten,
-        )
-        if keyword_note:
-            notes.append(keyword_note)
         self._emit(on_stage, 'keywords', {
             'passage_count': len(keyword_hits),
             'titles': evidence_builder.labels_for_passages(
                 [pid for pid, _ in keyword_hits], self.passage_map, self.unit_map, 5),
         })
-
-        # ---- 通道 3~6：条款号 / 文号 / 章节 / 标题 ----
-        exact_channels = channels.exact_channels(self.units, self.unit_map, parsed)
 
         # ---- 相关性闸门：问题与知识库完全无关时，不要拿低分结果硬凑证据 ----
         min_dense = float(getattr(config, 'RETRIEVAL_MIN_DENSE', 0.45) or 0.0)
@@ -263,19 +322,6 @@ class PolicyRetriever:
                 'notes': notes,
                 'seconds': round(time.perf_counter() - started, 3),
             }
-
-        # ---- 汇总候选并做 RRF 融合 ----
-        records: dict[str, dict] = {}
-        dense_unit_ids = fusion.add_dense_candidates(
-            records, dense_hits, self.passage_map, self.unit_map)
-        keyword_unit_ids = fusion.add_keyword_candidates(
-            records, keyword_hits, self.passage_map, self.unit_map)
-        channel_lists: dict[str, list[str]] = {
-            'BGE': dense_unit_ids,
-            'BM25': keyword_unit_ids,
-        }
-        channel_lists.update(exact_channels)
-        fusion.fuse(records, channel_lists, self.unit_map, self.unit_passages)
 
         # ---- 时效 / 版本 / 硬过滤 ----
         current_docs = self._current_docs(as_of)
@@ -297,6 +343,10 @@ class PolicyRetriever:
 
         # 跨制度问题：前几名全来自同一份文档时，用最后一个名额换入另一份文档
         selection = ranking.diversify_documents(ordered, top_k, self.unit_map, records)
+        if len(sub_queries) > 1:
+            usable_set = set(kept)
+            quotas = [[uid for uid in group if uid in usable_set][:5] for group in sub_ranked]
+            selection = ranking.enforce_quotas(selection, ordered, quotas, top_k)
         # 条款证据会带上紧邻的表格行；这些行不再单独占一个证据位
         selection = ranking.fill_with_attached_rows(
             selection, ordered, top_k, self.unit_map,
