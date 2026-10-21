@@ -85,6 +85,8 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
 
 ```
 PolicyRAG/
+├─ start.py              # 一键启动（start/status/stop/restart/install）
+├─ start.bat             # Windows 双击启动
 ├─ app/                  # 后端主程序
 │  ├─ main.py            # FastAPI 入口
 │  ├─ config.py          # 配置（路径、模型、端口）
@@ -239,14 +241,34 @@ python scripts/ingest.py knowledge/samples --publish
 ### 6. 启动服务
 
 ```bash
+python start.py
+```
+
+脚本会自动检查虚拟环境、模型、`.env` 和前端，在后台启动服务，等服务就绪后打开浏览器。**Windows 上也可以直接双击 `start.bat`。**
+
+首次在新机器上使用，先装依赖：
+
+```bash
+python start.py install
+```
+
+其他常用命令：
+
+```bash
+python start.py status     # 查看运行状态、知识库版本、模型是否正常
+python start.py stop       # 停止服务
+python start.py restart    # 重启
+```
+
+不想用脚本时，也可以手动启动（这个窗口不要关，关掉服务就停了）：
+
+```bash
 python -m uvicorn app.main:app --host 127.0.0.1 --port 7880
 ```
 
-看到 `Uvicorn running on http://127.0.0.1:7880` 即成功。**这个窗口不要关**，关掉服务就停了。
-
 ### 7. 打开网页
 
-浏览器访问 **http://127.0.0.1:7880** 。
+用 `start.py` 启动会自动打开浏览器；没打开就手动访问 **http://127.0.0.1:7880** 。
 
 试问：`实验室危险化学品怎么领用？`
 
@@ -347,13 +369,7 @@ BGE-base 在 CPU 上编码几千条也就一两分钟。
 
 ### Q4：端口 7880 被占用
 
-换端口：
-
-```bash
-python -m uvicorn app.main:app --port 7881
-```
-
-或查占用：`netstat -ano | findstr :7880`。
+先看是不是 PolicyRAG 自己已经启动：`python start.py status`。确认被其他程序占用时，改 `.env` 里的 `POLICYRAG_PORT=7881` 再 `python start.py`，或用 `netstat -ano | findstr :7880` 查占用进程。
 
 ### Q5：打开网页一片空白
 
