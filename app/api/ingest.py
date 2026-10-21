@@ -218,8 +218,18 @@ async def api_ingest_upload(files: list[UploadFile] = File(...),
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400,
                                 detail=f'metadata 不是合法 JSON：{exc.msg}') from exc
-        if not isinstance(meta, dict):
-            raise HTTPException(status_code=400, detail='metadata 必须是 JSON 对象')
+        if isinstance(meta, list):
+            if len(meta) > len(uploads):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f'metadata 列表长度（{len(meta)}）不能超过文件数（{len(uploads)}）')
+            for index, item in enumerate(meta):
+                if not isinstance(item, dict):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f'metadata 第 {index + 1} 项必须是 JSON 对象')
+        elif not isinstance(meta, dict):
+            raise HTTPException(status_code=400, detail='metadata 必须是 JSON 对象或对象列表')
 
     pipeline = _pipeline()
     try:

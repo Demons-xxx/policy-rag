@@ -132,12 +132,29 @@ def _new_job_id() -> str:
     return f"job-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
 
-def submit_upload(files: list[tuple[str, bytes]], meta: dict | None = None) -> str:
-    """保存上传文件到 data/uploads/<job_id>/，创建任务并后台逐个入库。"""
+def meta_for_file(meta: dict | list | None, index: int) -> dict:
+    """按文件序号取元数据：列表按顺序一一对应，字典全局共用。"""
+    if isinstance(meta, list):
+        item = meta[index] if index < len(meta) else {}
+        return item if isinstance(item, dict) else {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def submit_upload(files: list[tuple[str, bytes]], meta: dict | list | None = None) -> str:
+    """保存上传文件到 data/uploads/<job_id>/，创建任务并后台逐个入库。
+
+    ``meta`` 可以是全局对象（所有文件共用），也可以是与 ``files`` 顺序一致的
+    对象列表（每份文件各自的标题、文号、生效日期等）。
+    """
     config.ensure_dirs()
     if not files:
         raise ValueError("没有收到上传文件。")
-    cleaned_meta = _clean_meta(meta)
+    if isinstance(meta, list):
+        cleaned_meta = [_clean_meta(item) for item in meta]
+        if len(cleaned_meta) < len(files):
+            cleaned_meta = cleaned_meta + [{}] * (len(files) - len(cleaned_meta))
+    else:
+        cleaned_meta = _clean_meta(meta)
     job_id = _new_job_id()
     upload_dir = config.UPLOADS_DIR / job_id
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -198,7 +215,8 @@ def run_job(job_id: str) -> None:
             try:
                 if not file_path:
                     raise RuntimeError("上传文件路径缺失")
-                result = ingest_path(Path(file_path), meta=meta, job_id=job_id)
+                result = ingest_path(Path(file_path), meta=meta_for_file(meta, index),
+                                     job_id=job_id)
                 docs.append({
                     "doc_id": result["doc_id"],
                     "title": result.get("title"),
