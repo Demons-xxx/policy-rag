@@ -22,6 +22,7 @@ const form=reactive({title:'',doc_no:'',version_label:'',effective_from:'',effec
 const libraryLoading=ref(false),libraryError=ref(''),connectionLoading=ref(false),connectionError=ref(''),atBottom=ref(true),retryBusy=ref('')
 const pdfPage=ref(1)
 let controller:AbortController|null=null,toastTimer:ReturnType<typeof setTimeout>|null=null
+const fileMeta=ref<Record<string,Record<string,string>>>({})
 let uploadRequest:XMLHttpRequest|null=null,disposed=false,storageWarning=false,libraryRequest:Promise<void>|null=null
 const panes=usePaneWidths(()=>Boolean(panel.value))
 const connectionLabel=computed(()=>connectionLoading.value?'正在连接':connectionError.value?'连接已断开':info.value?.model_ready?'服务已连接':'服务准备中')
@@ -114,11 +115,16 @@ function refreshConnection(){Promise.all([loadInfo(),loadLibrary()])}
 function visibilityChanged(){if(!document.hidden){loadInfo();loadLibrary()}}
 function acceptFiles(list:FileList|File[]|null){if(!list||uploading.value)return;const selected=selectFiles(files.value,Array.from(list));if(selected.error)notice(selected.error);else files.value=selected.files;if(fileInput.value)fileInput.value.value=''}
 function drop(event:DragEvent){event.preventDefault();acceptFiles(event.dataTransfer?.files||null)}
-function uploadMetadata(){const meta:Record<string,string>={};const title=form.title.trim();if(!title)return null;meta.title=title;if(form.doc_no.trim())meta.doc_no=form.doc_no.trim();if(form.version_label.trim())meta.version_label=form.version_label.trim();if(form.effective_from)meta.effective_from=form.effective_from;if(form.effective_to)meta.effective_to=form.effective_to;if(form.department.trim())meta.department=form.department.trim();return meta}
+function fileKey(f:File){return f.name+'|'+f.size}
+function fileMetaFor(f:File){const k=fileKey(f);if(!fileMeta.value[k])fileMeta.value[k]={title:'',doc_no:'',version_label:'',effective_from:'',effective_to:'',department:''};return fileMeta.value[k]}
+function uploadMetadata(){const meta:Record<string,string>={};const title=form.title.trim();if(title)meta.title=title;if(form.doc_no.trim())meta.doc_no=form.doc_no.trim();if(form.version_label.trim())meta.version_label=form.version_label.trim();if(form.effective_from)meta.effective_from=form.effective_from;if(form.effective_to)meta.effective_to=form.effective_to;if(form.department.trim())meta.department=form.department.trim();return meta}
+function metaForFile(f:File){const base=uploadMetadata()||{};const own=fileMeta.value[fileKey(f)]||{};const merged:Record<string,string>={...base};for(const key of Object.keys(own)){const text=String(own[key]||'').trim();if(text)merged[key]=text}return merged}
+function metaPayload(){return files.value.length>1?files.value.map(metaForFile):(uploadMetadata()||{})}
+function missingTitle(){if(!files.value.length)return true;return files.value.some(f=>!String(metaForFile(f).title||'').trim())}
 async function upload(){
  if(uploading.value)return
- const meta=uploadMetadata()
- if(!files.value.length||!meta){notice('请选择文件并填写制度名称');return}
+ const meta=metaPayload()
+ if(missingTitle()){notice('请为每份文件填写制度名称');return}
  const data=new FormData();files.value.forEach(f=>data.append('files',f));data.append('metadata',JSON.stringify(meta))
  uploading.value=true;uploadProgress.value=0
  try{await new Promise<void>((resolve,reject)=>{const xhr=new XMLHttpRequest();uploadRequest=xhr;xhr.open('POST','/api/ingest');xhr.timeout=600000;xhr.upload.onprogress=e=>{if(e.lengthComputable)uploadProgress.value=Math.round(e.loaded/e.total*100)};xhr.onload=()=>{let result:any={};try{result=JSON.parse(xhr.responseText)}catch{}xhr.status>=200&&xhr.status<300?resolve():reject(new Error(typeof result.detail==='string'?result.detail:'上传未完成'))};xhr.onerror=()=>reject(new Error('连接中断，文件已保留，可重新上传'));xhr.ontimeout=()=>reject(new Error('上传超时，文件已保留'));xhr.onabort=()=>reject(new Error('上传已取消'));xhr.send(data)})
@@ -177,12 +183,13 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
   </aside>
  </div>
  <div v-if="uploadOpen" class="modal-backdrop" @click.self="!uploading&&(uploadOpen=false)"><section class="modal upload-modal"><header><h2>上传制度资料</h2><button class="icon-button" aria-label="关闭上传" :disabled="uploading" @click="uploadOpen=false"><Icon name="close"/></button></header><div class="drop-zone" @dragover.prevent @drop="drop" @click="!uploading&&fileInput?.click()"><Icon name="upload"/><strong>拖入 PDF、DOCX、MD 或 TXT，或选择文件</strong><input ref="fileInput" type="file" accept=".pdf,.docx,.md,.txt" multiple hidden aria-label="选择制度文件" @change="acceptFiles(($event.target as HTMLInputElement).files)"></div><div v-if="files.length" class="selection-summary">{{files.length}}份文件 · {{(files.reduce((n,f)=>n+f.size,0)/1024/1024).toFixed(1)}}MB</div><div class="selected-files"><div v-for="(f,i) in files" :key="f.name"><Icon name="file"/><span>{{f.name}}</span><button class="icon-button" aria-label="移除文件" :disabled="uploading" @click="files.splice(i,1)"><Icon name="close"/></button></div></div>
-  <div class="upload-fields"><label>制度名称 *<input v-model="form.title" placeholder="例如：XX大学实验室安全管理办法" :disabled="uploading"></label><label>文号<input v-model="form.doc_no" placeholder="例如：校发〔2025〕27号" :disabled="uploading"></label><label>版本<input v-model="form.version_label" placeholder="例如：2025年修订版" :disabled="uploading"></label><label>归口部门<input v-model="form.department" placeholder="例如：实验室与设备管理处" :disabled="uploading"></label><label>生效日期<input v-model="form.effective_from" type="date" :disabled="uploading"></label><label>废止日期<input v-model="form.effective_to" type="date" :disabled="uploading"></label></div><div v-if="uploading" class="upload-progress"><span :style="{width:uploadProgress+'%'}"></span></div><footer><button class="quiet-button" :disabled="uploading" @click="uploadOpen=false">取消</button><button class="primary-button" :disabled="uploading||!files.length||!form.title.trim()" @click="upload">{{uploading?`上传中 ${uploadProgress}%`:'上传并入库'}}</button></footer>
+  <div class="upload-fields"><label>制度名称 *<input v-model="form.title" placeholder="例如：XX大学实验室安全管理办法" :disabled="uploading"></label><label>文号<input v-model="form.doc_no" placeholder="例如：校发〔2025〕27号" :disabled="uploading"></label><label>版本<input v-model="form.version_label" placeholder="例如：2025年修订版" :disabled="uploading"></label><label>归口部门<input v-model="form.department" placeholder="例如：实验室与设备管理处" :disabled="uploading"></label><label>生效日期<input v-model="form.effective_from" type="date" :disabled="uploading"></label><label>废止日期<input v-model="form.effective_to" type="date" :disabled="uploading"></label></div><div v-if="files.length>1" class="upload-fields per-file"><strong class="per-file-hint">已选择多份文件，请为每份填写制度名称（其余字段沿用上方填写值）</strong><div v-for="f in files" :key="fileKey(f)" class="per-file-row"><span class="per-file-name">{{f.name}}</span><label>制度名称 *<input v-model="fileMetaFor(f).title" placeholder="该文件的制度名称" :disabled="uploading"></label><label>文号<input v-model="fileMetaFor(f).doc_no" placeholder="可留空" :disabled="uploading"></label></div></div><div v-if="uploading" class="upload-progress"><span :style="{width:uploadProgress+'%'}"></span></div><footer><button class="quiet-button" :disabled="uploading" @click="uploadOpen=false">取消</button><button class="primary-button" :disabled="uploading||!files.length||missingTitle()" @click="upload">{{uploading?`上传中 ${uploadProgress}%`:'上传并入库'}}</button></footer>
  </section></div>
  <div v-if="toast" class="toast" role="status">{{toast}}</div>
 </template>
 
 <style scoped>
+.per-file{display:flex;flex-direction:column;gap:.5rem}.per-file-hint{font-size:.85rem;color:var(--muted,#666);font-weight:500}.per-file-row{display:grid;grid-template-columns:minmax(8rem,1fr) minmax(10rem,1.2fr) minmax(8rem,1fr);gap:.5rem;align-items:end;padding:.5rem 0;border-bottom:1px dashed rgba(0,0,0,.12)}.per-file-name{font-size:.85rem;word-break:break-all;color:var(--muted,#666)}
 .brand{align-items:flex-start}
 .brand-text{display:flex;flex-direction:column;gap:2px;min-width:0}
 .brand-text strong{font-size:17px;line-height:1.2;letter-spacing:.2px}

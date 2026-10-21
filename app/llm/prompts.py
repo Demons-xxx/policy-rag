@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from app import config
 
 # 最近保留的对话轮数（一问一答算一轮），与契约“最近 6 轮”一致。
@@ -34,10 +36,26 @@ CHAT_SYSTEM_PROMPT = """你是高校政策与制度智能问答助手。当前�
 
 
 def _clip(text: str, limit: int) -> str:
+    """超长时在句末标点处截断，避免历史消息从半句话中间断开。"""
     text = str(text or '').strip()
     if len(text) <= limit:
         return text
-    return text[:limit] + '…'
+    head = text[:limit]
+    cut = max(head.rfind(mark) for mark in ('。', '！', '？', '；', '\n'))
+    if cut > 0:
+        return head[:cut + 1].rstrip() + '…'
+    return head.rstrip() + '…'
+
+
+_CITATION_RE = re.compile(r'\[证据\d+\]')
+
+
+def _strip_citations(text: str) -> str:
+    """历史回答里的 [证据n] 是上一轮的证据编号，带进本轮会和新编号冲突。"""
+    text = _CITATION_RE.sub('', str(text or ''))
+    text = re.sub(r'[ 	]{2,}', ' ', text)
+    text = re.sub(r' +([。，；：！？、])', r'\1', text)
+    return text.strip()
 
 
 def normalize_history(history: list[dict] | None,
@@ -60,7 +78,10 @@ def normalize_history(history: list[dict] | None,
         role = str(item.get('role') or '').strip().lower()
         if role not in ('user', 'assistant'):
             continue
-        content = _clip(item.get('content') or '', MAX_HISTORY_ITEM_CHARS)
+        raw = item.get('content') or ''
+        if role == 'assistant':
+            raw = _strip_citations(raw)
+        content = _clip(raw, MAX_HISTORY_ITEM_CHARS)
         if not content:
             continue
         cleaned.append({'role': role, 'content': content})

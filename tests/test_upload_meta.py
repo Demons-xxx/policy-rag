@@ -64,3 +64,39 @@ def test_upload_rejects_non_object_metadata_item(monkeypatch):
     )
     assert response.status_code == 400
     assert '必须是 JSON 对象' in response.json()['detail']
+
+
+def test_run_job_passes_each_files_own_metadata(monkeypatch):
+    from app.ingest import pipeline
+
+    captured: list[tuple[str, dict]] = []
+
+    def fake_ingest(path, meta=None, job_id=None):
+        captured.append((str(path), dict(meta or {})))
+        return {'doc_id': 'doc-' + str(path), 'title': (meta or {}).get('title'),
+                'unit_count': 1, 'deduplicated': False, 'issues': []}
+
+    class FakeCatalog:
+        def __init__(self, *a, **k):
+            self.payload = {
+                'files': [{'name': '甲.txt', 'path': '甲.txt'},
+                          {'name': '乙.txt', 'path': '乙.txt'}],
+                'meta': [{'title': '甲制度'}, {'title': '乙制度'}],
+            }
+
+        def get_job(self, job_id):
+            return {'job_id': job_id, 'payload': self.payload}
+
+        def update_job(self, *a, **k):
+            return None
+
+        def record_audit(self, *a, **k):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(pipeline, 'ingest_path', fake_ingest)
+    monkeypatch.setattr(pipeline, 'Catalog', FakeCatalog)
+    pipeline.run_job('job-test')
+    assert [meta['title'] for _, meta in captured] == ['甲制度', '乙制度']
