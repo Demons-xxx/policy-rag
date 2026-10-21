@@ -574,8 +574,6 @@ test: 测试
 - 检索：新增查询拆解（`app/retrieval/planner.py`），「A 和 B 分别怎么规定」会拆成多个子句分别召回，
   并为每个子问题保留至少一个证据位；40 题评测的跨文档题 5/5。
 - 入库：`/api/ingest` 的 `metadata` 支持与 `files` 顺序一致的对象列表，一次上传多份文件可各自登记标题/文号/生效日期。
-- 质量：`scripts/drill_extract.py` 抽包演练（`DRILL OK`）与 `tests/test_architecture.py` 架构守卫，
-  保证这套内核可以被单独拿走复用。
 
 ## 附：一句话排障顺序
 
