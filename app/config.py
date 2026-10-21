@@ -61,6 +61,9 @@ TOP_K = int(env('POLICYRAG_TOP_K', '5'))
 MAX_CONTEXT_TOKENS = int(env('POLICYRAG_MAX_CONTEXT_TOKENS', '4096'))
 MAX_HISTORY_CHARS = int(env('POLICYRAG_MAX_HISTORY_CHARS', '6000'))
 MAX_HISTORY_MESSAGES = int(env('POLICYRAG_MAX_HISTORY_MESSAGES', '12'))
+# 向量相关性闸门：最佳向量相似度低于该值时视为「知识库没有相关内容」，
+# 不拿低分结果凑证据；设 0 关闭。有条款号/文号等精确命中时不受该阈值限制。
+RETRIEVAL_MIN_DENSE = float(env('POLICYRAG_RETRIEVAL_MIN_DENSE', '0.45'))
 
 
 def ensure_dirs() -> None:

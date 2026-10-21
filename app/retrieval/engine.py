@@ -45,6 +45,8 @@ _CHANNEL_WEIGHTS = {
     '标题': 0.8,
 }
 _CHANNEL_ORDER = ['BGE', 'BM25', '文号', '条款号', '章节', '标题']
+# 精确/半精确通道：命中这些通道的结果不受向量阈值限制
+EXACT_CHANNELS = ('文号', '条款号', '章节', '标题')
 
 # 标题尾部版本标记，如「（2025年修订）」「（2023年版）」；用于把新旧版本归到同一主题
 _VERSION_SUFFIX_RE = re.compile(r'[（(][^（）()]{0,20}?(?:修订|版|年)[^（）()]{0,20}?[）)]$')
@@ -299,6 +301,25 @@ class PolicyRetriever:
         # ---- 通道 3~6：条款号 / 文号 / 章节 / 标题 ----
         exact_channels = self._exact_channels(parsed)
 
+        # ---- 相关性闸门：问题与知识库完全无关时，不要拿低分结果硬凑证据 ----
+        min_dense = float(getattr(config, 'RETRIEVAL_MIN_DENSE', 0.45) or 0.0)
+        max_dense = max((float(score) for _, score in dense_hits), default=0.0)
+        has_exact = any(exact_channels.get(name) for name in ('文号', '条款号', '章节', '标题'))
+        if min_dense > 0 and not has_exact and max_dense < min_dense:
+            reason = '未找到与问题直接相关的制度条款，建议换一种问法或补充事项名称'
+            notes = _dedupe(notes + [reason])
+            self._emit(on_stage, 'evidence', {'titles': [], 'notes': notes})
+            return {
+                'question': question,
+                'rewritten': rewritten,
+                'filters': {'department': department_filter, 'as_of': as_of},
+                'results': [],
+                'context': '',
+                'tokens': 0,
+                'notes': notes,
+                'seconds': round(time.perf_counter() - started, 3),
+            }
+
         # ---- 汇总候选并做 RRF 融合 ----
         records: dict[str, dict] = {}
 
@@ -378,6 +399,8 @@ class PolicyRetriever:
         # ---- 时效 / 版本 / 硬过滤 ----
         current_docs = self._current_docs(as_of)
         stale_ids: set[str] = set()
+        stale_candidates: list[tuple[str, float]] = []
+        explicit_doc_key = doc_no_key(parsed.get('doc_no') or '') if parsed.get('doc_no') else None
         usable: list[str] = []
         for unit_id in records:
             unit = self.unit_map[unit_id]
@@ -400,15 +423,11 @@ class PolicyRetriever:
             doc_id = str(unit.get('doc_id'))
             if (current_doc and doc_id != current_doc) or self._expired(unit, as_of):
                 stale_ids.add(unit_id)
+                stale_candidates.append((unit_id, float(records[unit_id]['rrf'])))
+                # 旧版内容默认不进证据，只保留版本提示；用户明确点名旧文号时才返回
+                if not (explicit_doc_key and doc_no_key(unit.get('doc_no') or '') == explicit_doc_key):
+                    continue
             usable.append(unit_id)
-
-        # 未降权前的靠前候选：用来判断「用户确实问到了旧版本内容」，即使旧版
-        # 最终没有进入证据，也要在 notes 里提示存在更新版本。
-        window = max(top_k * 3, 10)
-        raw_top = {
-            unit_id
-            for unit_id in sorted(usable, key=lambda uid: (-records[uid]['rrf'], uid))[:window]
-        }
 
         # ---- 章节导语去重与排序 ----
         heading_flags = {
@@ -495,6 +514,14 @@ class PolicyRetriever:
                 break
             record = records[unit_id]
             unit = self.unit_map[unit_id]
+            # 单条结果也要过相关性：向量分太低、关键词也不强、又不是精确命中时，
+            # 不放进证据，避免回答里出现「奖学金办法」这类无关引用。
+            if max_dense > 0 and min_dense > 0:
+                dense_ok = float(record['dense']) >= min_dense
+                keyword_ok = float(record['bm25']) >= 8.0
+                exact_ok = bool(record['channels'] & set(EXACT_CHANNELS))
+                if not (dense_ok or keyword_ok or exact_ok):
+                    continue
             evidence = self._build_evidence(unit_id, record)
             cost = self._count_tokens(evidence)
             if used_tokens + cost > budget:
@@ -519,9 +546,21 @@ class PolicyRetriever:
                 },
             })
 
-        # 用户问到的主题若存在更新版本，即便旧版没被选进证据也要提示
-        for unit_id in sorted(raw_top):
-            if unit_id in stale_ids:
+        # 用户问到的主题若存在更新版本，即便旧版没被选进证据也要提示；
+        # 只有「问题确实在问版本/有效性」且旧版候选与最佳证据得分接近时才提示，
+        # 否则每次问到该制度的任何条款都附带版本提示，反而干扰阅读。
+        version_words = ('有效', '现行', '旧版', '新版', '修订', '废止', '版本', '之前', '原来')
+        topic_text = f'{question}{rewritten}'
+        wants_version = any(word in topic_text for word in version_words)
+        best_selected = 0.0
+        for item in results:
+            value = float(records[str(item['unit']['id'])]['rrf'])
+            if value > best_selected:
+                best_selected = value
+        if wants_version or explicit_doc_key:
+            for unit_id, score in sorted(stale_candidates, key=lambda pair: -pair[1]):
+                if best_selected and score < best_selected * 0.6:
+                    continue
                 note = self._version_note(self.unit_map[unit_id], current_docs)
                 if note:
                     version_notes.append(note)

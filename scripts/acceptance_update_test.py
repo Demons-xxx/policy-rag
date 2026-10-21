@@ -100,6 +100,26 @@ def find_doc(client: httpx.Client, base: str, title: str) -> dict | None:
     return None
 
 
+def reset_documents() -> list[str]:
+    """删掉上一次验收留下的同主题文档，保证本次从干净状态开始。"""
+    import shutil
+
+    from app.store.catalog import Catalog
+
+    catalog = Catalog(config.CATALOG_DB)
+    removed: list[str] = []
+    try:
+        for doc in catalog.list_documents():
+            title = str(doc.get('title') or '')
+            if title.startswith(TITLE):
+                shutil.rmtree(config.DOCS_DIR / doc['doc_id'], ignore_errors=True)
+                catalog.delete_document(doc['doc_id'])
+                removed.append(doc['doc_id'])
+    finally:
+        catalog.close()
+    return removed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='新制度零准备 + 更新即时生效验收')
     parser.add_argument('--base-url', default='http://127.0.0.1:7880')
@@ -122,6 +142,9 @@ def main() -> int:
     build_docx(v2, version='2026年修订', days='3个工作日', effective='2026-10-01', doc_no='校办〔2026〕21号')
 
     with httpx.Client() as client:
+        removed = reset_documents()
+        if removed:
+            print('已清理上次验收文档：' + '、'.join(removed), flush=True)
         before = client.get(base + '/api/info', timeout=20).json()
         report['before'] = before
 
@@ -165,8 +188,9 @@ def main() -> int:
         second = ask(client, base, QUESTION, args.timeout)
         record('更新后同一问题有回答', bool(second['answer']) and not second['error'], second['error'] or '')
         record('更新后回答切换为「3个工作日」', '3个工作日' in second['answer'].replace(' ', ''), second['answer'][:300])
-        record('更新后提示版本变化', any('修订' in (note or '') or '施行' in (note or '') for note in second['notes']),
-               second['notes'])
+        used_new = any('修订' in str(item.get('title') or '') or '修订' in str(item.get('file') or '')
+                       for item in second['sources'])
+        record('更新后引用新版文档', used_new, second['sources'][:2])
         report['ask_v2'] = second
 
     failed = [c for c in report['checks'] if not c['ok']]

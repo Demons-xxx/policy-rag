@@ -94,6 +94,34 @@ def _source_items(result: dict) -> list[dict]:
     return items
 
 
+def _same_text(left: str, right: str) -> bool:
+    """忽略标点和空白后比较两句话是否相同。"""
+    def norm(text: str) -> str:
+        return ''.join(str(text or '').split()).strip('?？。.!！,，;；:：')
+
+    return norm(left) == norm(right)
+
+
+def _last_user_question(history: list[dict]) -> str:
+    for message in reversed(history or []):
+        if isinstance(message, dict) and str(message.get('role') or '') == 'user':
+            text = str(message.get('content') or '').strip()
+            if text:
+                return text
+    return ''
+
+
+def _recent_questions(history: list[dict], limit: int = 2) -> list[str]:
+    """按时间顺序取最近几条用户问题，用于改写失败时兜底拼接。"""
+    questions: list[str] = []
+    for message in history or []:
+        if isinstance(message, dict) and str(message.get('role') or '') == 'user':
+            text = str(message.get('content') or '').strip()
+            if text:
+                questions.append(text)
+    return questions[-limit:]
+
+
 class _AnswerStats:
     """记录本次生成的字符数与是否被截断。"""
 
@@ -295,10 +323,21 @@ def _events(request: AskRequest) -> Iterator[str]:
 
     # 只有多轮对话才需要改写补全；首轮直接检索，省一次模型调用。
     if history:
+        candidate = ''
         try:
-            rewritten = rewrite(question, history, llm) or rewritten
+            candidate = (rewrite(question, history, llm) or '').strip()
         except Exception:
-            rewritten = rewritten or question
+            candidate = ''
+        # 改写失败或模型原样返回时，用「最近两轮问题 + 本轮问题」兜底，
+        # 避免「我一次想领10天的量可以吗」这类省略句丢掉上下文。
+        if not candidate or _same_text(candidate, question):
+            topics = _recent_questions(history, limit=2)
+            merged = ' '.join(topics + [question]).strip()
+            if merged and not _same_text(merged, question):
+                candidate = merged[:300]
+            else:
+                candidate = rewritten or question
+        rewritten = candidate
     yield from _policy_flow(llm, question, rewritten, history, started)
 
 

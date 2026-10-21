@@ -24,10 +24,17 @@ ROUTE_SYSTEM = """你是高校政策问答系统的意图路由模块。判断�
 
 REWRITE_SYSTEM = """你是高校政策问答系统的问句改写模块，负责多轮对话中的指代消解与省略补全。
 把用户当前问题改写成一句可以独立检索制度库的完整问句：
-- 把“这个/那个/它/上面说的/那第十二条”等指代补全成对话历史里明确的制度名称、条款号或事项；
+- 必须补全对话历史中的主题：如果当前问题只说“它/这个/那/一次想领…/可以吗”等，要在问句里补上历史正在讨论的制度名称或事项（例如“实验室危险化学品领用”）；
+- 把“这个/那个/它/上面说的/那第十二条”等指代补全成明确的制度名称、条款号或事项；
 - 补全省略的主语、对象和动作；
+- 即使当前问题本身看起来完整，也要保留历史主题，使它脱离上下文仍然可理解；
 - 不要回答问题，不要解释，不要添加历史里没有的信息；
 - 只输出改写后的问句，不要输出引号、编号或任何前缀。
+
+示例：
+历史：用户问“实验室危险化学品怎么领用？”，助手回答了领用流程。
+当前问题：我一次想领10天的量可以吗？
+输出：实验室危险化学品一次领用10天的量是否符合规定？
 """
 
 _JSON_BLOCK = re.compile(r'\{.*\}', re.DOTALL)
@@ -36,6 +43,20 @@ _PREFIX = re.compile(r'^(?:改写(?:后)?(?:的)?(?:检索)?问句|检索问句|
 _TRAILING = '。；;，, \t\r\n'
 _MODE_CHAT = {'chat', 'chitchat', 'chat_mode', 'greeting', '闲聊', '寒暄', '问候'}
 _MODE_POLICY = {'policy', 'retrieve', 'search', 'rag', 'knowledge', '制度', '检索'}
+
+# 明显的寒暄/自我介绍，不需要先检索制度；出现制度相关词时仍按 policy 处理
+_GREETING = re.compile(r'^(?:你好|您好|hi|hello|嗨|在吗|谢谢|多谢|再见|你能做什么|你是谁|介绍一下(?:你|自己))', re.IGNORECASE)
+_POLICY_HINTS = ('规定', '办法', '制度', '流程', '标准', '审批', '报销', '请假', '实验室',
+                 '奖学金', '经费', '条款', '第', '怎么', '如何', '多少', '哪些', '能否')
+
+
+def _is_small_talk(question: str) -> bool:
+    text = (question or '').strip()
+    if not text or len(text) > 24:
+        return False
+    if not _GREETING.match(text):
+        return False
+    return not any(word in text for word in _POLICY_HINTS)
 
 
 def _fallback(question: str, reason: str) -> dict:
@@ -81,6 +102,9 @@ def route(question: str, history: list[dict], llm: ChatClient) -> dict:
     question = (question or '').strip()
     if not question:
         return _fallback(question, '问题为空，按制度检索处理')
+    if _is_small_talk(question):
+        # 寒暄直接走闲聊，省一次路由模型调用，也不会被历史带偏成制度检索
+        return {'mode': 'chat', 'search_query': question, 'reason': '寒暄/自我介绍'}
 
     messages = [{'role': 'system', 'content': ROUTE_SYSTEM}]
     messages.extend(_recent_history(history))

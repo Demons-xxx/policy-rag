@@ -305,7 +305,10 @@ def test_route_and_rewrite_degrade_without_llm():
         def complete(self, *args, **kwargs):
             return '这不是 JSON'
 
-    assert routing.route('你好', [], GarbageLLM())['mode'] == 'policy'
+    assert routing.route('实验室安全有什么要求', [], GarbageLLM())['mode'] == 'policy'
+    # 寒暄走本地判断，不依赖模型，也不会被历史带成制度检索
+    assert routing.route('你好', [], GarbageLLM())['mode'] == 'chat'
+    assert routing.route('你好，实验室怎么领用危化品', [], GarbageLLM())['mode'] == 'policy'
 
 
 # ---------------------------------------------------------------------------

@@ -273,11 +273,20 @@ def test_repealed_filtered_and_old_version_noted(retriever: PolicyRetriever) -> 
     # repealed 文档绝不返回
     assert 'doc-repealed#u0001' not in ids
     assert all(item['unit'].get('status') != 'repealed' for item in result['results'])
-    # 新旧两版同标题：现行版优先，旧版保留但排后面
-    assert 'doc-new#u0001' in ids and 'doc-old#u0001' in ids
-    assert ids.index('doc-new#u0001') < ids.index('doc-old#u0001')
+    # 新旧两版同标题：只返回现行版正文，旧版不再作为证据
+    assert 'doc-new#u0001' in ids
+    assert 'doc-old#u0001' not in ids
+    # 普通问题不主动提示版本，避免每次回答都带一句无关的版本说明
+    assert not any('旧版内容仅作参考' in note for note in result['notes'])
+
+
+def test_version_question_gets_note(retriever: PolicyRetriever) -> None:
+    """用户明确问旧版/有效性时，即使旧版没进证据也要提示现行版本。"""
+    result = retriever.search('差旅报销旧版标准还有效吗？', top_k=5)
+    ids = _ids(result)
+
+    assert 'doc-old#u0001' not in ids
     assert any('旧版内容仅作参考' in note for note in result['notes'])
-    assert any('2025修订版' in note for note in result['notes'])
 
 
 def test_as_of_filters_future_version(retriever: PolicyRetriever) -> None:    # 2024 年时点：新版本尚未施行，应只命中旧版且不产生旧版提示
@@ -291,7 +300,7 @@ def test_as_of_filters_future_version(retriever: PolicyRetriever) -> None:    # 
 
 def test_version_note_even_if_old_not_selected(retriever: PolicyRetriever) -> None:
     """旧版没进证据时也要提示存在更新版本，避免用户误用旧标准。"""
-    result = retriever.search('差旅报销有什么标准？', top_k=1)
+    result = retriever.search('差旅报销旧版标准还有效吗？', top_k=1)
 
     assert len(result['results']) == 1
     assert result['results'][0]['unit']['id'] == 'doc-new#u0001'
