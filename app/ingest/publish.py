@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from app import config
-from app.core import release as release_module
+from app.store import releases as release_module
 from app.ingest.common import (
     now_iso,
     read_json,

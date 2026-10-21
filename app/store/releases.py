@@ -5,7 +5,7 @@
     data/state/active_release.json        # 指向当前发布目录
 
 上层（runtime / api / publish）只通过本模块读写发布，不直接拼路径，
-这样将来换成对象存储或数据库时只改这里。`app/core/release.py` 是兼容门面。
+这样将来换成对象存储或数据库时只改这里。兼容门面已移除，统一从这里导入。
 """
 from __future__ import annotations
 

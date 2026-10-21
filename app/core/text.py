@@ -22,7 +22,7 @@ def normalize(text: str | None) -> str:
 
 
 def squash(text: str | None) -> str:
-    """去掉全部空白，用于标题/条款号的宽松比较。"""
+    """去掉全部空白，用于标题/编号的宽松比较。"""
     return normalize(text).replace(' ', '')
 
 

@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app import config  # noqa: E402
-from app.core import release as release_module  # noqa: E402
+from app.store import releases as release_module  # noqa: E402
 from app.ingest.publish import publish_release  # noqa: E402
 
 

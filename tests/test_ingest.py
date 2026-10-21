@@ -20,7 +20,7 @@ if str(FIXTURES) not in sys.path:
 import make_samples  # noqa: E402
 
 from app import config  # noqa: E402
-from app.core import release as release_module  # noqa: E402
+from app.store import releases as release_module  # noqa: E402
 from app.ingest import publish as publish_module  # noqa: E402
 from app.ingest.common import read_jsonl  # noqa: E402
 from app.ingest.parser import parse_document  # noqa: E402

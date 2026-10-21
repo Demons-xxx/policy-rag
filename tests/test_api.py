@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app import config
 from app.api import documents
 from app.api import info as info_api
-from app.core.runtime import runtime
+from app.wiring import runtime
 from app.llm import prompts, routing
 from app.llm.client import ChatClient
 from app.main import app

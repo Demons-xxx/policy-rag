@@ -7,7 +7,7 @@ import time
 from fastapi import APIRouter
 
 from app import config
-from app.core.runtime import runtime
+from app.wiring import runtime
 
 router = APIRouter()
 
@@ -56,7 +56,7 @@ def _base_info() -> dict:
     except Exception as exc:  # 发布清单损坏时仍要能打开页面
         active = None
         try:
-            from app.core import release
+            from app.store import releases as release
             active = release.read_active()
         except Exception:
             active = None

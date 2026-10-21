@@ -346,19 +346,19 @@ class GenerateStep:
 
 
 def _runtime_llm() -> Any:
-    from app.core.runtime import runtime
+    from app.wiring import runtime
 
     return runtime.llm()
 
 
 def _runtime_retriever() -> Any:
-    from app.core.runtime import runtime
+    from app.wiring import runtime
 
     return runtime.retriever()
 
 
 def _runtime_release_id() -> str | None:
-    from app.core.runtime import runtime
+    from app.wiring import runtime
 
     return runtime.release_id()
 

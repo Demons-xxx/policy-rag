@@ -135,7 +135,7 @@ class PolicyRetriever:
         name = self.manifest.get('collection')
         if name:
             return str(name)
-        from app.core.release import collection_name
+        from app.store.releases import collection_name
         release_id = str(self.manifest.get('release_id') or self.release_dir.name)
         return collection_name(release_id)
 

@@ -1,10 +1,14 @@
-"""问答运行时单例：持有检索器与生成客户端，发布变化时热重载。"""
+"""装配层（组合根）：把发布存储、检索器、生成客户端组装成运行时单例。
+
+这是唯一允许「跨层拼装」的地方：上层（api/qa）通过它拿依赖，
+下层模块之间不互相 import。发布变化时自动热重载。
+"""
 from __future__ import annotations
 
 import threading
 
 from app import config
-from app.core import release
+from app.store import releases as release
 
 
 class Runtime:

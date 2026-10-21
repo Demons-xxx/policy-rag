@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app import config  # noqa: E402
-from app.core import release as release_core  # noqa: E402
+from app.store import releases as release_core  # noqa: E402
 from app.retrieval.engine import PolicyRetriever  # noqa: E402
 
 
