@@ -563,6 +563,19 @@ test: 测试
 
 ---
 
+## 更新记录
+
+### 0.2.0
+
+- 架构：配置对象化（`app/settings.py`）、领域包（`app/domain/versions.py`）、发布存储（`app/store/releases.py`）、
+  部件契约（`app/core/contracts.py`）、组合根（`app/wiring.py`）；检索/入库/问答各自的流水线拆开，
+  详见 [docs/架构.md](docs/架构.md) 与 [docs/复用指南.md](docs/复用指南.md)。
+- 检索：新增查询拆解（`app/retrieval/planner.py`），「A 和 B 分别怎么规定」会拆成多个子句分别召回，
+  并为每个子问题保留至少一个证据位；30 题评测的跨文档题从 2/4 提升到 4/4。
+- 入库：`/api/ingest` 的 `metadata` 支持与 `files` 顺序一致的对象列表，一次上传多份文件可各自登记标题/文号/生效日期。
+- 质量：`scripts/drill_extract.py` 抽包演练（`DRILL OK`）与 `tests/test_architecture.py` 架构守卫，
+  保证这套内核可以被单独拿走复用。
+
 ## 附：一句话排障顺序
 
 ```
