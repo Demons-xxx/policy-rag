@@ -381,6 +381,9 @@ class PolicyRetriever:
             status = str(unit.get('status') or 'active').lower()
             if status == 'repealed':
                 continue
+            if self._table_header_only(unit):
+                # 表头行没有数据，命中它只会让模型看到列名而看不到内容
+                continue
             if doc_filter and str(unit.get('doc_id')) != doc_filter:
                 continue
             if department_filter:
@@ -728,12 +731,40 @@ class PolicyRetriever:
     def _build_evidence(self, unit_id: str, record: dict) -> str:
         unit = self.unit_map[unit_id]
         text = str(unit.get('text') or '').strip()
+        if str(unit.get('kind') or '') == 'table_row':
+            text = self._table_text(unit) or text
         if self._count_tokens(text) > EVIDENCE_MAX_TOKENS:
             text = self._excerpt(unit_id, record.get('passage_id'))
             if self._count_tokens(text) > EVIDENCE_MAX_TOKENS:
                 text = self._clip_tokens(text, EVIDENCE_MAX_TOKENS)
         header = self._evidence_header(unit)
         return f'{header}\n{text}' if text else header
+
+    @staticmethod
+    def _table_text(unit: dict) -> str:
+        """表格行证据带上表名与表头，模型才知道每个单元格的含义。"""
+        table = unit.get('table') or {}
+        headers = [str(cell).strip() for cell in (table.get('headers') or []) if str(cell).strip()]
+        row = [str(cell).strip() for cell in (table.get('row') or []) if str(cell).strip()]
+        if not row:
+            return ''
+        lines: list[str] = []
+        name = str(table.get('name') or '').strip()
+        if name:
+            lines.append(f'表格：{name}')
+        if headers:
+            lines.append('列：' + ' | '.join(headers))
+        lines.append('行：' + ' | '.join(row))
+        return '\n'.join(lines)
+
+    @classmethod
+    def _table_header_only(cls, unit: dict) -> bool:
+        if str(unit.get('kind') or '') != 'table_row':
+            return False
+        table = unit.get('table') or {}
+        headers = [str(cell).strip() for cell in (table.get('headers') or [])]
+        row = [str(cell).strip() for cell in (table.get('row') or [])]
+        return bool(headers) and row == headers
 
     def _excerpt(self, unit_id: str, passage_id: str | None) -> str:
         passages = self.unit_passages.get(unit_id) or []
