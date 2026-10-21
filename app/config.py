@@ -48,6 +48,8 @@ CATALOG_DB = STATE_DIR / 'catalog.sqlite'
 LLM_BASE_URL = env('POLICYRAG_LLM_BASE_URL', 'http://127.0.0.1:8081/v1').rstrip('/')
 LLM_API_KEY = env('POLICYRAG_LLM_API_KEY', '')
 LLM_MODEL = env('POLICYRAG_LLM_MODEL', 'Qwen3.8-27B')
+# 推理型模型是否输出思考过程：disabled（默认，推荐）/ enabled / auto / none（不发送该参数）
+LLM_THINKING = env('POLICYRAG_LLM_THINKING', 'disabled').lower()
 VECTOR_BACKEND = env('POLICYRAG_VECTOR_BACKEND', 'chroma').lower()
 DEVICE = env('POLICYRAG_DEVICE', 'auto').lower()
 HOST = env('POLICYRAG_HOST', '127.0.0.1')

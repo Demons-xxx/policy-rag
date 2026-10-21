@@ -139,6 +139,9 @@ class PolicyRetriever:
         self._doc_units: dict[str, list[dict]] = {}
         for unit in self.units:
             self._doc_units.setdefault(str(unit.get('doc_id') or ''), []).append(unit)
+        # 按文档原始顺序排列，便于把紧跟在条款后的表格并进条款证据
+        for items in self._doc_units.values():
+            items.sort(key=lambda item: (int(item.get('order') or 0), str(item.get('id') or '')))
         self._doc_samples: dict[str, dict] = {
             doc_id: items[0] for doc_id, items in self._doc_units.items() if items
         }
@@ -452,12 +455,42 @@ class PolicyRetriever:
 
         ordered = sorted(kept, key=order_key)
 
+        # 跨制度问题（如「科研经费买危化品」，同时涉及报销办法和安全办法）如果
+        # 前几名全来自同一份文档，用最后一个名额换入另一份文档的最优候选，
+        # 避免只答一半。单文档问题通常不受影响（另一份文档得分需达到一半）。
+        selection = list(ordered[:top_k])
+        if len(selection) >= 3:
+            selected_docs = {str(self.unit_map[uid].get('doc_id')) for uid in selection}
+            if len(selected_docs) == 1:
+                best_score = float(records[selection[0]]['rrf'])
+                for uid in ordered[top_k:]:
+                    if str(self.unit_map[uid].get('doc_id')) in selected_docs:
+                        continue
+                    if float(records[uid]['rrf']) >= best_score * 0.5:
+                        selection[-1] = uid
+                        break
+
+        # 条款证据会带上紧邻的表格行；这些行不再单独占一个证据位
+        chosen: list[str] = []
+        attached_rows: set[str] = set()
+        for uid in list(selection) + [item for item in ordered if item not in selection]:
+            if len(chosen) >= top_k:
+                break
+            if uid in attached_rows:
+                continue
+            chosen.append(uid)
+            unit = self.unit_map[uid]
+            if str(unit.get('kind') or '') == 'article':
+                for row in self._adjacent_table_rows(unit):
+                    attached_rows.add(str(row.get('id')))
+        selection = chosen
+
         # ---- 组装证据与 token 预算 ----
         budget = int(getattr(config, 'MAX_CONTEXT_TOKENS', 4096) or 4096)
         results: list[dict] = []
         used_tokens = 0
         version_notes: list[str] = []
-        for unit_id in ordered:
+        for unit_id in selection:
             if len(results) >= top_k:
                 break
             record = records[unit_id]
@@ -730,15 +763,62 @@ class PolicyRetriever:
 
     def _build_evidence(self, unit_id: str, record: dict) -> str:
         unit = self.unit_map[unit_id]
+        kind = str(unit.get('kind') or '')
         text = str(unit.get('text') or '').strip()
-        if str(unit.get('kind') or '') == 'table_row':
+        if kind == 'table_row':
             text = self._table_text(unit) or text
+        elif kind == 'article':
+            block = self._table_block(self._adjacent_table_rows(unit))
+            if block:
+                room = EVIDENCE_MAX_TOKENS - self._count_tokens(block)
+                if room > 80:
+                    text = self._clip_tokens(text, room).rstrip() + '\n' + block
         if self._count_tokens(text) > EVIDENCE_MAX_TOKENS:
             text = self._excerpt(unit_id, record.get('passage_id'))
             if self._count_tokens(text) > EVIDENCE_MAX_TOKENS:
                 text = self._clip_tokens(text, EVIDENCE_MAX_TOKENS)
         header = self._evidence_header(unit)
         return f'{header}\n{text}' if text else header
+
+    def _adjacent_table_rows(self, unit: dict) -> list[dict]:
+        """条款以冒号/「如下」结尾时，返回紧跟其后的连续表格行。"""
+        if str(unit.get('kind') or '') != 'article':
+            return []
+        text = str(unit.get('text') or '').rstrip()
+        if not (text.endswith('：') or text.endswith(':') or '如下' in text[-30:]):
+            return []
+        doc_id = str(unit.get('doc_id') or '')
+        order = int(unit.get('order') or 0)
+        rows: list[dict] = []
+        for other in self._doc_units.get(doc_id, []):
+            if int(other.get('order') or 0) <= order:
+                continue
+            if str(other.get('kind') or '') != 'table_row':
+                break
+            rows.append(other)
+            if len(rows) >= 12:
+                break
+        return rows
+
+    @classmethod
+    def _table_block(cls, rows: list[dict]) -> str:
+        if not rows:
+            return ''
+        table = rows[0].get('table') or {}
+        headers = [str(cell).strip() for cell in (table.get('headers') or []) if str(cell).strip()]
+        name = str(table.get('name') or '').strip()
+        lines: list[str] = []
+        if name:
+            lines.append(f'表格：{name}')
+        if headers:
+            lines.append('列：' + ' | '.join(headers))
+        for row in rows:
+            cells = [str(cell).strip() for cell in ((row.get('table') or {}).get('row') or [])]
+            cells = [cell for cell in cells if cell]
+            if not cells or cells == headers:
+                continue
+            lines.append('行：' + ' | '.join(cells))
+        return '\n'.join(lines)
 
     @staticmethod
     def _table_text(unit: dict) -> str:

@@ -204,9 +204,19 @@ cp .env.example .env       # macOS / Linux
 POLICYRAG_LLM_BASE_URL=https://api.example.com/v1
 POLICYRAG_LLM_API_KEY=sk-你的密钥
 POLICYRAG_LLM_MODEL=模型名称
+POLICYRAG_LLM_THINKING=disabled
 ```
 
-- 正式使用填外部 API；
+- 正式使用填外部 API；当前项目联调使用的是火山方舟：
+
+  ```ini
+  POLICYRAG_LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3
+  POLICYRAG_LLM_API_KEY=ark-你的密钥
+  POLICYRAG_LLM_MODEL=deepseek-v4.1-flash
+  ```
+
+  注意方舟的 `/api/v3` 与 `/api/coding/v3` 是两个入口，密钥和可用模型可能不同；换服务商时只改这三行，不用改代码。
+- `POLICYRAG_LLM_THINKING=disabled` 会关闭推理型模型的深度思考（方舟用 `thinking: {"type":"disabled"}`）；如果服务商不认这个参数，改成 `none`。
 - 想完全本地跑，也可以接 Ollama：`POLICYRAG_LLM_BASE_URL=http://127.0.0.1:11434/v1`，模型名填 `qwen2.5:7b` 之类。
 - `.env` 已被 Git 忽略，**不会**泄露密钥；不要把密钥写进代码。
 
@@ -522,7 +532,7 @@ test: 测试
 - **单机单进程**：没有做多用户权限与并发压测；
 - **本地 27B 量化模型较慢**：单题约 40–70 秒（12GB 显卡混合推理）；接外部 API 后会明显变快，检索本身是亚秒级。
 
-本地实测记录（58 项单测、13 项冒烟、12 项验收、5 题抽评）见 [docs/验收记录.md](docs/验收记录.md)。
+本地实测记录（58 项单测、13 项冒烟、12 项验收、30 题评测 28/30）见 [docs/验收记录.md](docs/验收记录.md)。
 
 后续计划：
 

@@ -48,16 +48,34 @@ def _content_text(content) -> str:
 
 
 class ChatClient:
-    def __init__(self, base_url: str, model: str, api_key: str = '', timeout: float = 120) -> None:
+    def __init__(self, base_url: str, model: str, api_key: str = '', timeout: float = 120,
+                 thinking: str = 'disabled') -> None:
         self.base_url = (base_url or '').rstrip('/')
         self.model = model
         self.api_key = api_key or ''
         self.timeout = float(timeout)
+        # 推理型模型（如 deepseek / doubao）默认关闭思考过程，避免答案被思考 token 吃掉；
+        # 设为 none 表示不发送该参数（部分 OpenAI 兼容服务不认这个字段）。
+        self.thinking = (thinking or 'none').strip().lower()
         self.last_error = ''
         self._headers = {'Content-Type': 'application/json'}
         if self.api_key:
             self._headers['Authorization'] = f'Bearer {self.api_key}'
-        self._client = httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10.0))
+        self._client = httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10.0),
+                                    headers=self._headers)
+
+    def _payload(self, messages: list[dict], max_tokens: int, temperature: float,
+                 stream: bool) -> dict:
+        payload = {
+            'model': self.model,
+            'messages': messages,
+            'stream': bool(stream),
+            'max_tokens': int(max_tokens),
+            'temperature': float(temperature),
+        }
+        if self.thinking in ('enabled', 'disabled', 'auto'):
+            payload['thinking'] = {'type': self.thinking}
+        return payload
 
     # ---- 内部工具 ----
     def _fail(self, reason: str) -> RuntimeError:
@@ -79,13 +97,7 @@ class ChatClient:
                temperature: float = 0.2) -> Iterator[str]:
         if not self.base_url:
             raise self._fail('未配置模型地址（POLICYRAG_LLM_BASE_URL）')
-        payload = {
-            'model': self.model,
-            'messages': messages,
-            'stream': True,
-            'max_tokens': int(max_tokens),
-            'temperature': float(temperature),
-        }
+        payload = self._payload(messages, max_tokens, temperature, stream=True)
         try:
             with self._client.stream('POST', self._url('chat/completions'), json=payload) as response:
                 if response.status_code >= 400:

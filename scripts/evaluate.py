@@ -39,9 +39,9 @@ DEFAULT_QUESTIONS = ROOT / "tests" / "eval" / "questions.jsonl"
 DEFAULT_BASE_URL = "http://127.0.0.1:7880"
 ALLOWED_TYPES = {"direct", "fuzzy", "followup", "multi_turn", "cross_doc", "refuse", "after_update"}
 REFUSAL_RE = re.compile(
-    r"未在现行制度中找到依据|未找到(?:相关)?依据|没有(?:相关)?(?:依据|规定|制度)|"
+    r"未在现行(?:有效)?(?:制度|规定|办法|文件)中找到依据|未找到(?:相关)?依据|没有(?:相关)?(?:依据|规定|制度)|"
     r"无法(?:回答|确定|从现有)|未收录|不在(?:现行)?(?:制度|资料|知识库)(?:范围|中)|"
-    r"现行制度(?:中|里)未(?:作|有)|未涉及"
+    r"现行(?:有效)?(?:制度|规定)(?:中|里)未(?:作|有)|未涉及"
 )
 CITE_RE = re.compile(r"\[(?:证据)?(\d+)\]")
 

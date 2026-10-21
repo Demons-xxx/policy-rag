@@ -44,6 +44,7 @@ class Runtime:
                     base_url=config.LLM_BASE_URL,
                     model=config.LLM_MODEL,
                     api_key=config.LLM_API_KEY,
+                    thinking=config.LLM_THINKING,
                 )
             return self._llm
 
