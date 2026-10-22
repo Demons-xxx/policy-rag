@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -82,6 +83,9 @@ def convert(pdf: Path, device: str, artifacts: str | None, timeout: float) -> di
     }
 
 
+MARKER = '__DOCLING_JSON__'
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Docling PDF 解析 worker')
     parser.add_argument('--input', required=True)
@@ -92,13 +96,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         payload = convert(Path(args.input), args.device, args.artifacts, args.timeout)
+        code = 0
     except Exception as exc:  # 子进程失败时也要给主进程可读的中文原因
         payload = {'error': f'Docling 解析失败：{type(exc).__name__}: {exc}'}
-        Path(args.output).write_text(json.dumps(payload, ensure_ascii=False),
-                                     encoding='utf-8')
-        return 1
-    Path(args.output).write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
-    return 0
+        code = 1
+    text = json.dumps(payload, ensure_ascii=False)
+    if args.output == '-':
+        # 子进程运行在受限 token 下时可能写不了父进程创建的临时目录，直接走 stdout
+        sys.stdout.write(MARKER + text + '\n')
+        sys.stdout.flush()
+    else:
+        Path(args.output).write_text(text, encoding='utf-8')
+    return code
 
 
 if __name__ == '__main__':

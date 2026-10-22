@@ -142,7 +142,13 @@ PDF 每页先走文本层（PyMuPDF 或 docling），文本数 < `POLICYRAG_OCR_
 > 本项目**本机部署已设 `POLICYRAG_PARSER_PDF=docling`**（时间充裕、优先质量）；换机器或追求速度时改成 `pymupdf` 即可。文档解析器记录在 `meta.json` 的 `parser` 字段，事后可追溯。
 
 - 权重位置：`models/docling/`（已随项目拷贝，约 367 MB；`POLICYRAG_DOCLING_ARTIFACTS` 可覆盖）。
-- 运行时：主环境不装 docling，`scripts/docling_worker.py` 由外部「已装 docling 的 Python」执行；默认同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe`（Linux 为 `../RAG/script/runtime/parse/bin/python`）。没有同盘项目时必须显式配置：
+- 运行时（项目内，推荐）：`.venv-docling/`，从本机 Python 3.10 建独立环境并装 `docling==2.137.0`：
+  ```bash
+  D:/.develop/Lang/python/python.exe -m venv .venv-docling --system-site-packages
+  .venv-docling/Scripts/python.exe -m pip install docling==2.137.0 -i https://pypi.tuna.tsinghua.edu.cn/simple
+  ```
+  其中 `torch`（cu128）复用系统 Python 的全局安装，避免再下 3 GB；要完全隔离就在该 venv 里另装 `torch`。下载慢或断网时，也可从同盘 RAG 的 `local_service/runtime/parse/Lib/site-packages` 直接复制依赖（本项目正是这样完成离线重建的）。
+- 查找顺序：`POLICYRAG_DOCLING_PYTHON` 显式值 → 项目 `.venv-docling` → 同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe`（Linux 为 `../RAG/script/runtime/parse/bin/python`）。没有可用运行时且显式配置为空时，入库会报中文错误。
   ```ini
   POLICYRAG_PARSER_PDF=docling
   POLICYRAG_DOCLING_PYTHON=D:/path/to/docling-venv/Scripts/python.exe
@@ -150,7 +156,7 @@ PDF 每页先走文本层（PyMuPDF 或 docling），文本数 < `POLICYRAG_OCR_
   POLICYRAG_DOCLING_DEVICE=cuda
   POLICYRAG_DOCLING_TIMEOUT=600
   ```
-- docling 自带的是「可插拔 OCR 引擎」的接入能力（本机环境装有 easyocr），不是单独一个内置模型；本项目为了让 docling 专注版式/表格，在 worker 里 `do_ocr=False`，扫描页仍由 2.1.3 的外部 OCR 端点处理。
+- docling 自带的是「可插拔 OCR 引擎」的接入能力（本机环境装有 easyocr），不是单独一个内置模型；本项目为了让 docling 专注版式/表格，在 worker 里 `do_ocr=False`，扫描页由 2.1.3 的本地 OCR 兜底。
 - 手工验证（用带 docling 的解释器跑 worker）：
   ```bash
   D:/path/to/docling-venv/Scripts/python.exe scripts/docling_worker.py --input 样例.pdf --output out.json --device cuda --artifacts models/docling

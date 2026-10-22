@@ -53,3 +53,6 @@
 
 # 评测结果文件（每次运行生成）
 tests/eval/results-*.json
+
+# docling 独立运行时（可重建，不入库）
+.venv-docling/

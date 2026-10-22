@@ -146,9 +146,17 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
     )
     if not docling_artifacts.is_absolute():
         docling_artifacts = root / docling_artifacts
-    docling_runtime = (sibling / 'local_service' / 'runtime' / 'parse' / 'Scripts' / 'python.exe'
-                       if os.name == 'nt'
-                       else sibling / 'script' / 'runtime' / 'parse' / 'bin' / 'python')
+    # 项目内 docling 运行时（.venv-docling）优先；没装好时回退同盘 RAG 的 parse 运行时。
+    local_runtime = (root / '.venv-docling' / 'Scripts' / 'python.exe'
+                     if os.name == 'nt'
+                     else root / '.venv-docling' / 'bin' / 'python')
+    local_site = (root / '.venv-docling' / 'Lib' / 'site-packages'
+                  if os.name == 'nt' else root / '.venv-docling' / 'lib' / 'python3.10' / 'site-packages')
+    installed = (local_site / 'docling').is_dir()
+    docling_runtime = local_runtime if (installed and local_runtime.is_file()) else (
+        sibling / 'local_service' / 'runtime' / 'parse' / 'Scripts' / 'python.exe'
+        if os.name == 'nt'
+        else sibling / 'script' / 'runtime' / 'parse' / 'bin' / 'python')
     docling_python = Path(get('POLICYRAG_DOCLING_PYTHON', '') or docling_runtime)
     if str(docling_python) and not docling_python.is_absolute():
         docling_python = root / docling_python

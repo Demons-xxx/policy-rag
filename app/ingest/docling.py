@@ -40,9 +40,8 @@ def parse_pdf(path: Path) -> dict:
     device = str(getattr(config, 'DOCLING_DEVICE', 'cuda') or 'cuda')
     timeout = float(getattr(config, 'DOCLING_TIMEOUT', 600) or 600)
     with tempfile.TemporaryDirectory(prefix='docling-') as folder:
-        output = Path(folder) / 'parsed.json'
         command = [str(python), str(WORKER), '--input', str(path),
-                   '--output', str(output), '--device', device,
+                   '--output', '-', '--device', device,
                    '--timeout', str(timeout)]
         if artifacts:
             command.extend(['--artifacts', str(artifacts)])
@@ -52,10 +51,13 @@ def parse_pdf(path: Path) -> dict:
                                        timeout=timeout + 60, cwd=str(ROOT))
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f'Docling 解析超时（>{timeout:g}s）：{path.name}') from exc
-        if not output.is_file():
-            detail = (completed.stderr or completed.stdout or '').strip()[-500:]
+        marker = '__DOCLING_JSON__'
+        text = completed.stdout or ''
+        index = text.rfind(marker)
+        if index < 0:
+            detail = (completed.stderr or text or '').strip()[-500:]
             raise RuntimeError(f'Docling 子进程没有产出结果：{detail}')
-        payload = json.loads(output.read_text(encoding='utf-8'))
+        payload = json.loads(text[index + len(marker):])
     if payload.get('error'):
         raise RuntimeError(str(payload['error']))
     pages = payload.get('pages') or []
