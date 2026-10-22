@@ -41,6 +41,41 @@ __all__ = [
 ]
 
 
+def _apply_rerank(question: str, ordered: list[str],
+                  unit_map: dict[str, dict],
+                  records: dict[str, dict] | None = None) -> list[str]:
+    """用 bge-reranker 对前 RERANK_TOP_N 个候选重排；失败时回退原顺序。"""
+    limit = int(getattr(config, 'RERANK_TOP_N', 0) or 0)
+    if limit <= 0 or len(ordered) <= 1:
+        return ordered
+    from app.retrieval.rerank import get_reranker
+
+    reranker = get_reranker()
+    if reranker is None:
+        return ordered
+    head, tail = ordered[:limit], ordered[limit:]
+    texts = []
+    for unit_id in head:
+        unit = unit_map.get(unit_id) or {}
+        parts = [str(unit.get(key) or '') for key in ('title', 'article', 'text')]
+        texts.append(' '.join(part for part in parts if part).strip())
+    try:
+        scores = reranker.score(question, texts)
+    except Exception as exc:  # 单次失败不影响问答，下一次调用仍会重试
+        logger = __import__('logging').getLogger(__name__)
+        logger.warning('重排失败，已回退原排序：%s', exc)
+        return ordered
+    if len(scores) != len(head):
+        return ordered
+    if records is not None:
+        for unit_id, score in zip(head, scores):
+            record = records.get(unit_id)
+            if record is not None:
+                record.setdefault('scores', {})['rerank'] = round(float(score), 4)
+    order = sorted(range(len(head)), key=lambda index: (-scores[index], index))
+    return [head[index] for index in order] + tail
+
+
 def _read_jsonl(path: Path) -> list[dict]:
     if not path.is_file():
         return []
@@ -340,6 +375,8 @@ class PolicyRetriever:
         heading_flags = stage_filters.heading_flags(usable, self.unit_map)
         kept = stage_filters.dedupe_heading_units(usable, heading_flags, self.unit_map)
         ordered = ranking.order_units(kept, records, stale_ids, heading_flags)
+        # 交叉编码器重排：只影响前若干名，模型不可用时原样返回
+        ordered = _apply_rerank(rewritten or base, ordered, self.unit_map, records)
 
         # 跨制度问题：前几名全来自同一份文档时，用最后一个名额换入另一份文档
         selection = ranking.diversify_documents(ordered, top_k, self.unit_map, records)
@@ -383,17 +420,20 @@ class PolicyRetriever:
                 note = evidence_builder.version_note(unit, current_docs, self._doc_samples)
                 if note:
                     version_notes.append(note)
+            scores = {
+                'dense': round(float(record['dense']), 4),
+                'bm25': round(float(record['bm25']), 3),
+                'rrf': round(float(record['rrf']), 6),
+            }
+            if 'rerank' in (record.get('scores') or {}):
+                scores['rerank'] = record['scores']['rerank']
             results.append({
                 'rank': len(results) + 1,
                 'unit': dict(unit),
                 'evidence': evidence,
                 'citation': evidence_builder.citation(unit),
                 'channels': [name for name in fusion.CHANNEL_ORDER if name in record['channels']],
-                'scores': {
-                    'dense': round(float(record['dense']), 4),
-                    'bm25': round(float(record['bm25']), 3),
-                    'rrf': round(float(record['rrf']), 6),
-                },
+                'scores': scores,
             })
 
         # 用户问到的主题若存在更新版本，即便旧版没被选进证据也要提示；

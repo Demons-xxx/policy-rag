@@ -52,6 +52,12 @@ MAX_HISTORY_MESSAGES = _settings.max_history_messages
 # 不拿低分结果凑证据；设 0 关闭。有条款号/文号等精确命中时不受该阈值限制。
 RETRIEVAL_MIN_DENSE = _settings.retrieval_min_dense
 
+# ---- 交叉编码器重排 ----
+RERANK_ENABLED = _settings.rerank_enabled
+RERANK_MODEL_DIR = _settings.rerank_model_dir
+RERANK_TOP_N = _settings.rerank_top_n
+RERANK_BATCH = _settings.rerank_batch
+
 
 def env(name: str, default: str = '') -> str:
     value = os.environ.get(name)

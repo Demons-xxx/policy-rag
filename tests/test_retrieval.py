@@ -461,3 +461,26 @@ def test_chroma_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
             backend.client.delete_collection(name=collection)
         except Exception:
             pass
+
+
+def test_rerank_reorders_candidates_and_records_scores(monkeypatch):
+    from app.retrieval import engine
+
+    class FakeReranker:
+        def score(self, question, texts, batch_size=None):
+            return [0.1, 0.9, 0.5, 0.2][:len(texts)]
+
+    monkeypatch.setattr('app.retrieval.rerank.get_reranker', lambda: FakeReranker())
+    units = {key: {'title': '制度', 'article': '第一条', 'text': key} for key in ('a', 'b', 'c', 'd')}
+    records = {key: {} for key in units}
+    ordered = engine._apply_rerank('问题', ['a', 'b', 'c', 'd'], units, records)
+    assert ordered == ['b', 'c', 'd', 'a']
+    assert records['b']['scores']['rerank'] == 0.9
+
+
+def test_rerank_falls_back_when_model_missing(monkeypatch):
+    from app.retrieval import engine
+
+    monkeypatch.setattr('app.retrieval.rerank.get_reranker', lambda: None)
+    units = {key: {'text': key} for key in ('a', 'b')}
+    assert engine._apply_rerank('问题', ['a', 'b'], units, {}) == ['a', 'b']

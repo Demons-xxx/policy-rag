@@ -60,6 +60,11 @@ class Settings:
     top_k: int = 5
     max_context_tokens: int = 4096
     retrieval_min_dense: float = 0.45
+    # 交叉编码器重排（bge-reranker-v2-m3）；模型缺失时自动回退原排序
+    rerank_enabled: bool = True
+    rerank_model_dir: Path = field(default=None)  # type: ignore[assignment]
+    rerank_top_n: int = 20
+    rerank_batch: int = 16
     # 服务
     host: str = '127.0.0.1'
     port: int = 7880
@@ -108,6 +113,10 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
     embedding = Path(get('POLICYRAG_EMBEDDING_DIR', '') or embedding_default)
     if not embedding.is_absolute():
         embedding = root / embedding
+    rerank_default = models_dir / 'bge-reranker-v2-m3'
+    rerank_dir = Path(get('POLICYRAG_RERANK_MODEL_DIR', '') or rerank_default)
+    if not rerank_dir.is_absolute():
+        rerank_dir = root / rerank_dir
 
     return Settings(
         root=root,
@@ -134,6 +143,10 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
         top_k=_as_int(get('POLICYRAG_TOP_K', '5'), 5),
         max_context_tokens=_as_int(get('POLICYRAG_MAX_CONTEXT_TOKENS', '4096'), 4096),
         retrieval_min_dense=_as_float(get('POLICYRAG_RETRIEVAL_MIN_DENSE', '0.45'), 0.45),
+        rerank_enabled=get('POLICYRAG_RERANK', '1').lower() not in ('0', 'false', 'off', 'no'),
+        rerank_model_dir=rerank_dir,
+        rerank_top_n=_as_int(get('POLICYRAG_RERANK_TOP_N', '20'), 20),
+        rerank_batch=_as_int(get('POLICYRAG_RERANK_BATCH', '16'), 16),
         host=get('POLICYRAG_HOST', '127.0.0.1'),
         port=_as_int(get('POLICYRAG_PORT', '7880'), 7880),
         max_history_chars=_as_int(get('POLICYRAG_MAX_HISTORY_CHARS', '6000'), 6000),
