@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import difflib
 import re
 
 from app.core.text import normalize, squash
@@ -45,6 +46,52 @@ def title_key(unit: dict) -> str:
     title = squash(unit.get('doc_title') or '').replace('《', '').replace('》', '')
     stripped = VERSION_SUFFIX_RE.sub('', title)
     return stripped or title
+
+
+def infer_version_chains(documents: list[dict], threshold: float = 0.9) -> list[dict]:
+    """推断版本链：同文号或标题相似度 ≥ threshold 且生效日期更晚 → 新文档替代旧文档。
+
+    只处理现行（active）文档，返回 ``[{old_doc_id, new_doc_id, reason}]``，
+    供发布时把旧版置为 superseded 并写入 supersedes/superseded_by。
+    """
+    docs = [doc for doc in documents if doc.get('doc_id')]
+    relations: list[dict] = []
+    for old in docs:
+        if normalize_status(old.get('status')) != STATUS_ACTIVE:
+            continue
+        old_start = str(old.get('effective_from') or '')
+        if not old_start:
+            continue
+        best: tuple[tuple, dict, str] | None = None
+        for new in docs:
+            if new is old or normalize_status(new.get('status')) != STATUS_ACTIVE:
+                continue
+            new_start = str(new.get('effective_from') or '')
+            if not new_start or new_start <= old_start:
+                continue
+            old_no = str(old.get('doc_no') or '').strip()
+            same_no = bool(old_no) and old_no == str(new.get('doc_no') or '').strip()
+            if same_no:
+                reason = f'同文号 {old_no}'
+            else:
+                old_topic = title_key({'doc_title': old.get('title') or ''})
+                new_topic = title_key({'doc_title': new.get('title') or ''})
+                if not old_topic or not new_topic:
+                    continue
+                ratio = difflib.SequenceMatcher(None, old_topic, new_topic).ratio()
+                if ratio < threshold:
+                    continue
+                reason = f'标题相似度 {ratio:.2f}'
+            candidate = ((new_start, str(new.get('doc_id'))), new, reason)
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+        if best is not None:
+            relations.append({
+                'old_doc_id': str(old['doc_id']),
+                'new_doc_id': str(best[1]['doc_id']),
+                'reason': best[2],
+            })
+    return relations
 
 
 def effective_from_ok(unit: dict, as_of: str) -> bool:

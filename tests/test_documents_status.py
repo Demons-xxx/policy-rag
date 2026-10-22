@@ -47,3 +47,36 @@ def test_disable_and_restore_document(tmp_path, monkeypatch):
 
     missing = client.delete('/api/documents/doc-404?publish=false')
     assert missing.status_code == 404
+
+
+def test_version_link_override(tmp_path, monkeypatch):
+    """手工覆盖版本链：推断误判时用 API 修正，只改登记不重新发布。"""
+    monkeypatch.setattr(config, 'CATALOG_DB', tmp_path / 'catalog.sqlite')
+    catalog = Catalog(config.CATALOG_DB)
+    catalog.upsert_document(_doc('doc-old'))
+    catalog.upsert_document(_doc('doc-new'))
+    catalog.close()
+
+    client = TestClient(app)
+    response = client.post('/api/documents/doc-old/version-link', json={
+        'status': 'superseded', 'superseded_by': 'doc-new'})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['status'] == 'superseded'
+    assert payload['superseded_by'] == 'doc-new'
+
+    catalog = Catalog(config.CATALOG_DB)
+    try:
+        row = catalog.get_document('doc-old')
+        assert row['status'] == 'superseded' and row['superseded_by'] == 'doc-new'
+        actions = [item['action'] for item in catalog.list_audit(10)]
+        assert 'document_version_link' in actions
+    finally:
+        catalog.close()
+
+    bad = client.post('/api/documents/doc-old/version-link', json={'status': 'bogus'})
+    assert bad.status_code == 400
+    empty = client.post('/api/documents/doc-old/version-link', json={})
+    assert empty.status_code == 400
+    missing = client.post('/api/documents/doc-404/version-link', json={'status': 'active'})
+    assert missing.status_code == 404

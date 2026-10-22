@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from app import config
+from app.domain import versions as versioning
 from app.store import releases as release_module
 from app.ingest.common import (
     now_iso,
@@ -230,6 +231,8 @@ def _manifest_docs(docs: list[dict]) -> list[dict]:
             "version_label": doc.get("version_label"),
             "department": doc.get("department"),
             "status": doc.get("status"),
+            "supersedes": doc.get("supersedes"),
+            "superseded_by": doc.get("superseded_by"),
             "effective_from": doc.get("effective_from"),
             "effective_to": doc.get("effective_to"),
         }
@@ -272,6 +275,25 @@ def publish_release(device: str | None = None, force_full: bool = False) -> dict
         if not documents:
             raise RuntimeError("没有可发布的文档，请先入库制度资料。")
         documents.sort(key=lambda item: item["doc_id"])
+
+        # 版本链推断（T10）：同文号/标题相似且生效更晚 → 旧版自动置为 superseded，
+        # 并在新旧两侧写入 supersedes / superseded_by，接口与清单均可见。
+        relations = versioning.infer_version_chains(documents)
+        if relations:
+            by_id = {str(doc["doc_id"]): doc for doc in documents}
+            for relation in relations:
+                old = by_id.get(relation["old_doc_id"])
+                new = by_id.get(relation["new_doc_id"])
+                if not old or not new:
+                    continue
+                old["status"] = versioning.STATUS_SUPERSEDED
+                old["superseded_by"] = new["doc_id"]
+                new["supersedes"] = old["doc_id"]
+                catalog.upsert_document(old)
+                catalog.upsert_document(new)
+                catalog.record_audit("version_link", doc_id=str(old["doc_id"]), detail={
+                    "superseded_by": new["doc_id"], "reason": relation["reason"],
+                })
 
         encoder = _load_encoder(device)
         tokenizer = getattr(encoder, "tokenizer", None)

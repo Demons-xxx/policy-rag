@@ -10,10 +10,11 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import FileResponse, Response
 
 from app import config
+from app.store.catalog import STATUSES
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -72,6 +73,8 @@ def _public(record: dict) -> dict:
         'version_label': _pick(record, meta, 'version_label'),
         'department': _pick(record, meta, 'department'),
         'status': str(_pick(record, meta, 'status', 'active') or 'active'),
+        'supersedes': _pick(record, meta, 'supersedes'),
+        'superseded_by': _pick(record, meta, 'superseded_by'),
         'pages': pages,
         'has_pdf': has_pdf,
         'effective_from': _pick(record, meta, 'effective_from'),
@@ -161,6 +164,29 @@ def api_documents() -> dict:
     documents = [_public(record) for record in records if isinstance(record, dict)]
     documents.sort(key=lambda item: (item['status'] != 'active', item['title'] or item['name']))
     return {'documents': documents}
+
+
+@router.post('/documents/{doc_id}/version-link')
+def api_document_version_link(doc_id: str, payload: dict = Body(...)) -> dict:
+    """手工覆盖版本链（推断误判时用）：只改登记，不重新发布。"""
+    allowed = {'status', 'supersedes', 'superseded_by'}
+    updates = {key: payload.get(key) for key in allowed if key in payload}
+    if not updates:
+        raise HTTPException(status_code=400, detail='没有可更新的字段（status/supersedes/superseded_by）')
+    if 'status' in updates and updates['status'] not in STATUSES:
+        raise HTTPException(status_code=400, detail=f"状态不合法：{updates['status']}（可选 {'/'.join(STATUSES)}）")
+    catalog = _catalog()
+    try:
+        record = catalog.get_document(doc_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f'文档不存在：{doc_id}')
+        merged = dict(record)
+        merged.update(updates)
+        catalog.upsert_document(merged)
+        catalog.record_audit('document_version_link', doc_id=doc_id, detail=updates)
+        return _public(merged)
+    finally:
+        _close_catalog(catalog)
 
 
 @router.get('/documents/{doc_id}/pdf')

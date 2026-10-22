@@ -463,8 +463,8 @@ def test_api_documents_structure(client, monkeypatch, tmp_path):
     assert len(payload['documents']) == 1
     document = payload['documents'][0]
     assert set(document) == {'id', 'name', 'title', 'doc_no', 'version_label',
-                             'department', 'status', 'pages', 'has_pdf',
-                             'effective_from', 'effective_to'}
+                             'department', 'status', 'supersedes', 'superseded_by',
+                             'pages', 'has_pdf', 'effective_from', 'effective_to'}
     assert document['id'] == 'doc-abc123def456'
     assert document['name'] == '实验室安全管理办法.pdf'
     assert document['title'] == '实验室安全管理办法'

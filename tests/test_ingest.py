@@ -471,3 +471,39 @@ def test_split_text_token_windows(project):
 def test_split_text_short(project):
     passages = publish_module.split_text("短文本", FakeTokenizer())
     assert passages == [{"text": "短文本", "start": 0, "end": 3}]
+
+
+def test_publish_infers_version_chain(project, monkeypatch):
+    """同文号、生效日期更晚 → 旧版自动 superseded，清单两侧写入版本链。"""
+    from app.store.catalog import Catalog
+
+    encoder = FakeEncoder()
+    monkeypatch.setattr(publish_module, "_load_encoder", lambda device=None: encoder)
+
+    old_path = project / "samples" / "旧版.txt"
+    new_path = project / "samples" / "新版.txt"
+    old_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.write_text("第一章 总则\n第一条 旧版内容。\n", encoding="utf-8")
+    new_path.write_text("第一章 总则\n第一条 新版内容。\n", encoding="utf-8")
+    meta = {"title": "测试版本办法", "doc_no": "测发〔2020〕1号", "department": "测试部门"}
+    old = ingest_path(old_path, meta={**meta, "effective_from": "2020-01-01", "version_label": "2020版"})
+    new = ingest_path(new_path, meta={**meta, "effective_from": "2026-01-01", "version_label": "2026版"})
+    assert old["doc_id"] != new["doc_id"]
+
+    active = publish_module.publish_release()
+    catalog = Catalog()
+    try:
+        old_row = catalog.get_document(old["doc_id"])
+        new_row = catalog.get_document(new["doc_id"])
+    finally:
+        catalog.close()
+    assert old_row["status"] == "superseded"
+    assert old_row["superseded_by"] == new["doc_id"]
+    assert new_row["status"] == "active"
+    assert new_row["supersedes"] == old["doc_id"]
+
+    manifest = release_module.load_manifest(active)
+    by_id = {doc["doc_id"]: doc for doc in manifest["docs"]}
+    assert by_id[old["doc_id"]]["status"] == "superseded"
+    assert by_id[old["doc_id"]]["superseded_by"] == new["doc_id"]
+    assert by_id[new["doc_id"]]["supersedes"] == old["doc_id"]

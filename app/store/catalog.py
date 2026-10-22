@@ -18,7 +18,7 @@ STATUSES = ("active", "superseded", "repealed")
 #: documents 表字段，顺序与契约 2.1 一致
 DOCUMENT_COLUMNS = (
     "doc_id", "title", "doc_no", "version_label", "effective_from", "effective_to",
-    "department", "status", "supersedes", "file_name", "format", "pages", "has_pdf",
+    "department", "status", "supersedes", "superseded_by", "file_name", "format", "pages", "has_pdf",
     "sha256", "source_path", "imported_at",
 )
 
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS documents (
     department     TEXT,
     status         TEXT DEFAULT 'active',
     supersedes     TEXT,
+    superseded_by  TEXT,
     file_name      TEXT,
     format         TEXT,
     pages          INTEGER DEFAULT 0,
@@ -103,7 +104,15 @@ class Catalog:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA busy_timeout=15000")
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """老库补列：新增字段用 ALTER TABLE 就地升级，不丢已有登记。"""
+        rows = self._conn.execute('PRAGMA table_info(documents)').fetchall()
+        columns = {row['name'] for row in rows}
+        if 'superseded_by' not in columns:
+            self._conn.execute('ALTER TABLE documents ADD COLUMN superseded_by TEXT')
 
     # ---- 生命周期 ----
     def close(self) -> None:
