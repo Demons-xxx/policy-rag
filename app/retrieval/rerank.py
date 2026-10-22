@@ -51,6 +51,15 @@ class BgeReranker:
         items = [str(text or '') for text in (texts or [])]
         if not items:
             return []
+        from app.retrieval import gpu_guard
+
+        with gpu_guard.gpu_slot('重排'):
+            return self._score_locked(question, items, batch_size)
+
+    def _score_locked(self, question: str, items: list[str],
+                      batch_size: int | None = None) -> list[float]:
+        import torch
+
         query = str(question or '')
         step = max(1, int(batch_size or config.RERANK_BATCH or 16))
         scores: list[float] = []

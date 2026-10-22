@@ -266,6 +266,12 @@ python start.py restart    # 重启
 python -m uvicorn app.main:app --host 127.0.0.1 --port 7880
 ```
 
+**并发与 workers 建议**：默认单进程就够用。编码与重排共享一个 GPU 信号量
+（`RAG_GPU_CONCURRENCY`，默认 2），超出的请求排队等待、不会同时把显存打满，
+4 个并发问答实测正常。显存较小（≤8GB 且同时加载 BGE 与重排模型）时设为 1 更稳；
+不建议开多个 uvicorn worker：每个 worker 会各加载一份模型、各占一份显存，
+反而更容易 OOM。要横向扩容，优先把 `RAG_VECTOR_BACKEND` 换成 chroma + 独立向量服务。
+
 ### 7. 打开网页
 
 `start.py` 默认**不自动打开浏览器**（避免反复弹窗口），启动后手动访问 **http://127.0.0.1:7880** ；

@@ -46,6 +46,13 @@ class BgeEncoder:
         items = [str(text if text is not None else '') for text in (texts or [])]
         if not items:
             return np.zeros((0, self.dimension), dtype=np.float32)
+        from app.retrieval import gpu_guard
+
+        with gpu_guard.gpu_slot('编码'):
+            return self._encode_locked(items, query=query, batch_size=batch_size)
+
+    def _encode_locked(self, items: list[str], query: bool = False,
+                       batch_size: int = 32) -> np.ndarray:
         if query:
             items = [QUERY_PREFIX + item for item in items]
         step = max(1, int(batch_size or 32))

@@ -62,6 +62,7 @@ class Settings:
     top_k: int = 5
     max_context_tokens: int = 4096
     retrieval_min_dense: float = 0.45
+    gpu_concurrency: int = 2
     # 交叉编码器重排（bge-reranker-v2-m3）；模型缺失时自动回退原排序
     rerank_enabled: bool = True
     rerank_model_dir: Path = field(default=None)  # type: ignore[assignment]
@@ -172,6 +173,7 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
         top_k=_as_int(get('POLICYRAG_TOP_K', '5'), 5),
         max_context_tokens=_as_int(get('POLICYRAG_MAX_CONTEXT_TOKENS', '4096'), 4096),
         retrieval_min_dense=_as_float(get('POLICYRAG_RETRIEVAL_MIN_DENSE', '0.45'), 0.45),
+        gpu_concurrency=_as_int(get('RAG_GPU_CONCURRENCY', '2'), 2),
         rerank_enabled=get('POLICYRAG_RERANK', '1').lower() not in ('0', 'false', 'off', 'no'),
         rerank_model_dir=rerank_dir,
         rerank_top_n=_as_int(get('POLICYRAG_RERANK_TOP_N', '20'), 20),

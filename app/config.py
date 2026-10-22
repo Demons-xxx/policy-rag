@@ -53,6 +53,7 @@ MAX_HISTORY_MESSAGES = _settings.max_history_messages
 # 向量相关性闸门：最佳向量相似度低于该值时视为「知识库没有相关内容」，
 # 不拿低分结果凑证据；设 0 关闭。有条款号/文号等精确命中时不受该阈值限制。
 RETRIEVAL_MIN_DENSE = _settings.retrieval_min_dense
+GPU_CONCURRENCY = _settings.gpu_concurrency
 
 # ---- 交叉编码器重排 ----
 RERANK_ENABLED = _settings.rerank_enabled
