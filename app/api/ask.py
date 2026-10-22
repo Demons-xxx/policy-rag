@@ -10,12 +10,14 @@ HTTP 状态保持 200，避免前端解析到裸断的连接。
 from __future__ import annotations
 
 import json
+import time
 from typing import Iterator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app import observability
 from app.qa.flow import AnswerEvent, AnswerFlow, AnswerRequest, error_message
 
 router = APIRouter()
@@ -42,11 +44,47 @@ def _generate(payload: AskRequest) -> Iterator[str]:
     """
     request = AnswerRequest(question=payload.question, history=payload.history,
                             run_tag=payload.run_tag)
+    request_id = observability.new_request_id()
+    started = time.perf_counter()
+    marks: dict[str, float] = {}
+    error: str | None = None
+    sources = 0
     try:
         for event in AnswerFlow().run(request):
+            stage = event.stage
+            now = time.perf_counter()
+            if stage not in marks:
+                marks[stage] = now
+            data = event.payload or {}
+            if stage == 'error':
+                error = str(data.get('message') or '未知错误')
+            elif stage == 'sources':
+                sources = len(data.get('items') or [])
             yield encode(event)
     except Exception as exc:  # 兜底：编排器未预期的异常也转成 error 事件
-        yield encode(AnswerEvent('error', {'message': error_message(exc)}))
+        error = error_message(exc)
+        yield encode(AnswerEvent('error', {'message': error}))
+    finally:
+        def delta(first: str, second: str) -> float | None:
+            if first in marks and second in marks and marks[second] >= marks[first]:
+                return round((marks[second] - marks[first]) * 1000, 1)
+            return None
+
+        record = {
+            'request_id': request_id,
+            'at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+            'question': (payload.question or '')[:200],
+            'run_tag': payload.run_tag,
+            'route': 'retrieve' if 'query' in marks or 'evidence' in marks else 'chat',
+            'routing_ms': delta('routing', 'query'),
+            'retrieval_ms': delta('query', 'evidence'),
+            'first_token_ms': delta('generating', 'answer'),
+            'total_ms': round((time.perf_counter() - started) * 1000, 1),
+            'sources': sources,
+            'error': error,
+        }
+        observability.metrics.record(record)
+        observability.log_request(record)
 
 
 @router.post('/ask')
