@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
 from app import config
+
+
+class ReleaseError(ValueError):
+    """发布目录不存在、正在生效等可预期的操作错误。"""
 
 
 def read_active() -> dict | None:
@@ -59,6 +64,17 @@ def new_release_id() -> str:
     return 'rel-' + time.strftime('%Y%m%d-%H%M%S')
 
 
+def _dir_size(path: Path) -> int:
+    total = 0
+    for item in path.rglob('*'):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
 def list_releases() -> list[dict]:
     """按目录列出所有发布，最新在前（只读 manifest，不加载向量）。"""
     records: list[dict] = []
@@ -76,10 +92,77 @@ def list_releases() -> list[dict]:
         records.append({
             'id': path.name,
             'dir': str(path),
-            'created_at': data.get('created_at', ''),
-            'document_count': data.get('document_count', 0),
-            'unit_count': data.get('unit_count', 0),
-            'passage_count': data.get('passage_count', 0),
+            'published_at': data.get('published_at') or '',
+            'doc_count': int(data.get('doc_count') or 0),
+            'unit_count': int(data.get('unit_count') or 0),
+            'passage_count': int(data.get('passage_count') or 0),
+            'collection': data.get('collection') or '',
+            'size_bytes': _dir_size(path),
         })
-    records.sort(key=lambda item: item.get('created_at') or '', reverse=True)
+    records.sort(key=lambda item: item.get('published_at') or '', reverse=True)
     return records
+
+
+def _release_path(release_id: str) -> Path:
+    release_id = str(release_id or '').strip()
+    if not release_id or release_id in ('.', '..') or '/' in release_id or '\\' in release_id:
+        raise ReleaseError(f'发布编号不合法：{release_id!r}')
+    path = Path(config.RELEASES_DIR) / release_id
+    if not (path / 'manifest.json').is_file():
+        raise ReleaseError(f'发布不存在：{release_id}')
+    return path
+
+
+def _record_for(path: Path) -> dict:
+    data = json.loads((path / 'manifest.json').read_text(encoding='utf-8'))
+    return {
+        'schema': 1,
+        'id': path.name,
+        'dir': str(path.resolve()),
+        'collection': data.get('collection') or collection_name(path.name),
+        'published_at': data.get('published_at') or '',
+        'doc_count': int(data.get('doc_count') or 0),
+        'unit_count': int(data.get('unit_count') or 0),
+        'passage_count': int(data.get('passage_count') or 0),
+    }
+
+
+def activate(release_id: str) -> dict:
+    """把生效指针切到指定发布（回滚/前滚都用它），原子写。"""
+    path = _release_path(release_id)
+    previous = read_active()
+    record = _record_for(path)
+    write_active(record)
+    return {'active': record, 'previous': (previous or {}).get('id')}
+
+
+def delete_release(release_id: str) -> dict:
+    """删除一个非生效中的发布目录。"""
+    path = _release_path(release_id)
+    active = read_active()
+    if active and str(active.get('id')) == path.name:
+        raise ReleaseError('不能删除正在生效的发布；请先切换到其他发布')
+    shutil.rmtree(path)
+    return {'removed': path.name}
+
+
+def prune(keep: int = 5) -> dict:
+    """只保留最近 keep 个发布；正在生效的发布无论新旧都保留。"""
+    keep = max(1, int(keep or 1))
+    active = read_active()
+    active_id = str((active or {}).get('id') or '')
+    records = list_releases()
+    kept: list[str] = []
+    removed: list[str] = []
+    for index, record in enumerate(records):
+        release_id = str(record.get('id'))
+        if release_id == active_id or index < keep:
+            kept.append(release_id)
+            continue
+        path = Path(config.RELEASES_DIR) / release_id
+        try:
+            shutil.rmtree(path)
+            removed.append(release_id)
+        except OSError:
+            kept.append(release_id)
+    return {'removed': removed, 'kept': kept[:keep], 'kept_total': len(kept)}

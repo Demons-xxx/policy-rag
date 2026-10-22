@@ -50,11 +50,12 @@ def create_app() -> FastAPI:
     if _should_warmup():
         threading.Thread(target=_warmup, name='model-warmup', daemon=True).start()
 
-    from app.api import ask, documents, ingest, info as info_api
+    from app.api import ask, documents, ingest, info as info_api, releases
     app.include_router(info_api.router, prefix=API_PREFIX)
     app.include_router(ask.router, prefix=API_PREFIX)
     app.include_router(documents.router, prefix=API_PREFIX)
     app.include_router(ingest.router, prefix=API_PREFIX)
+    app.include_router(releases.router, prefix=API_PREFIX)
 
     @app.get('/healthz')
     def healthz():
