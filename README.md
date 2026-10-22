@@ -156,6 +156,7 @@ PDF 每页先走文本层（PyMuPDF 或 docling），文本数 < `POLICYRAG_OCR_
   POLICYRAG_DOCLING_DEVICE=cuda
   POLICYRAG_DOCLING_TIMEOUT=600
   ```
+- 常驻模式（默认）：首次解析加载一次模型，之后同一进程内连续解析直接复用（本机 3 页 9.5s → 0.4s）；`POLICYRAG_DOCLING_SERVE=0` 回退一次性子进程；worker 异常退出会自动重启一次。
 - docling 自带的是「可插拔 OCR 引擎」的接入能力（本机环境装有 easyocr），不是单独一个内置模型；本项目为了让 docling 专注版式/表格，在 worker 里 `do_ocr=False`，扫描页由 2.1.3 的本地 OCR 兜底。
 - 手工验证（用带 docling 的解释器跑 worker）：
   ```bash
