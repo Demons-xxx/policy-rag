@@ -881,7 +881,28 @@ robocopy D:\Work\PolicyRAG E:\Work\PolicyRAG /E /XD .venv node_modules __pycache
 拷完在新机器上重建 `.venv` 并 `pip install -r requirements.txt`；`models/`、`data/`、`.env`、`web/dist`
 都在包里，直接 `start.py` 即可。如果换了盘符，记得按 10.5 修正 `active_release.json` 的 `dir`。
 
+### 10.10 备份与恢复
+
+```bash
+python scripts/backup.py                 # data/docs、data/releases、data/state、.env → backups/policyrag-<时间>.zip
+python scripts/backup.py --keep 3         # 只保留最近 3 份
+python scripts/backup.py --include-models # 连 models/ 一起打包（约 3 GB）
+python scripts/backup.py --restore backups/policyrag-XXXX.zip   # 恢复（先停服务）
+```
+
+- 默认不备份 `models/`（可重新下载/拷贝）；备份 zip 写完会做完整性校验，损坏会报错。
+- 恢复 = 停服务 → 解开覆盖 → 重启 → 看 `/api/info` 的 release 与文档数是否一致。
+- 建议每天定时跑一次并把 zip 同步到另一块盘。
+
 ## 更新记录
+
+### 0.2.2（2026-10-22，T16–T19/T22）
+
+- PDF 解析器可自选（全局 env / 单次 `--parser` / 接口 `metadata.parser`）；docling 模型落在 `models/docling`。
+- 本地 OCR：RapidOCR/ONNX，权重 `models/rapidocr`（约 16MB），扫描页默认本地识别，外部端点可选优先。
+- docling 运行时项目内化（`.venv-docling`），常驻 worker 让连续解析从 9.5s 降到 0.4s。
+- 多文件上传并发解析（`POLICYRAG_INGEST_CONCURRENCY`，默认 4）。
+- 备份脚本 `scripts/backup.py`（保留最近 N 份、完整性校验、可恢复）。
 
 ### 0.2.1（2026-10-22，T1–T15 优化）
 
