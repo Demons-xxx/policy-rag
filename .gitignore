@@ -4,6 +4,7 @@
 !/.gitattributes
 !/README.md
 !/start.py
+!/start.bat
 !/AGENTS.md
 !/requirements.txt
 !/.env.example
