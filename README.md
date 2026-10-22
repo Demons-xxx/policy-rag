@@ -267,7 +267,9 @@ set HF_ENDPOINT=https://hf-mirror.com
 python -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-base-zh-v1.5', local_dir='models/bge-base-zh-v1.5')"
 ```
 
-验证：`models/bge-base-zh-v1.5/` 下应有 `pytorch_model.bin`（约 400MB）、`config.json`、`tokenizer.json` 等文件。
+验证：`models/bge-base-zh-v1.5/` 下应有 `pytorch_model.bin`（约 391MB）、`config.json`、`tokenizer.json` 等文件。
+
+> 重排模型、OCR、docling、Word 页图都是**可选项**，不装只影响对应能力，不阻塞问答；各自的模型与接入方式见 [2.1 模型与服务清单](#21-模型与服务清单配置项对照)。
 
 ### 4. 配置大模型
 
@@ -299,6 +301,7 @@ POLICYRAG_LLM_THINKING=disabled
 - `POLICYRAG_LLM_THINKING=disabled` 会关闭推理型模型的深度思考（方舟用 `thinking: {"type":"disabled"}`）；如果服务商不认这个参数，改成 `none`。
 - 想完全本地跑，也可以接 Ollama：`POLICYRAG_LLM_BASE_URL=http://127.0.0.1:11434/v1`，模型名填 `qwen2.5:7b` 之类。
 - `.env` 已被 Git 忽略，**不会**泄露密钥；不要把密钥写进代码。
+- `.env` 里其余可选项（重排、OCR、docling、DOCX 页图、缓存、并发、端口）见 [2.1](#21-模型与服务清单配置项对照) 与 [10.4](#104-配置-env)。
 
 ### 5. 灌入样例知识库
 
