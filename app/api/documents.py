@@ -193,3 +193,80 @@ def api_document_page_image(doc_id: str, page: str) -> Response:
 
     return Response(content=content, media_type='image/png',
                     headers={'Cache-Control': 'public, max-age=3600'})
+
+
+@router.delete('/documents/{doc_id}')
+def api_delete_document(doc_id: str, publish: bool = True) -> dict:
+    """停用文档：状态置为 repealed，之后的新发布不再包含它。
+
+    默认直接发布新版本（旧发布仍在 `data/releases` 里，可回滚）；
+    ``?publish=false`` 只改状态，由调用方稍后统一发布。
+    """
+    try:
+        catalog = _catalog()
+        try:
+            record = catalog.get_document(doc_id)
+            if not record:
+                raise HTTPException(status_code=404, detail='文档不存在')
+            if record.get('status') == 'repealed':
+                return {'ok': True, 'doc_id': doc_id, 'already': True}
+            catalog.set_status(doc_id, 'repealed')
+            catalog.record_audit('document_remove', detail={
+                'doc_id': doc_id, 'file': record.get('file_name'),
+            })
+            title = record.get('title') or record.get('file_name') or doc_id
+        finally:
+            _close_catalog(catalog)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning('停用文档失败 %s: %s', doc_id, exc)
+        raise HTTPException(status_code=503, detail=f'停用文档失败：{exc}') from exc
+
+    if not publish:
+        return {'ok': True, 'doc_id': doc_id, 'title': title, 'status': 'repealed',
+                'note': '状态已置为 repealed，调用 POST /api/publish 后生效'}
+    try:
+        from app.ingest.publish import publish_release
+
+        release = publish_release()
+    except Exception as exc:
+        log.warning('停用后发布失败 %s: %s', doc_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f'文档已停用，但发布新版本失败：{exc}。请稍后调用 POST /api/publish 重试',
+        ) from exc
+    return {'ok': True, 'doc_id': doc_id, 'title': title, 'status': 'repealed',
+            'release_id': release.get('id'), 'doc_count': release.get('doc_count')}
+
+
+@router.post('/documents/{doc_id}/restore')
+def api_restore_document(doc_id: str, publish: bool = False) -> dict:
+    """恢复被停用的文档（状态回到 active）；默认只改状态，发布由调用方决定。"""
+    try:
+        catalog = _catalog()
+        try:
+            record = catalog.get_document(doc_id)
+            if not record:
+                raise HTTPException(status_code=404, detail='文档不存在')
+            if record.get('status') != 'repealed':
+                return {'ok': True, 'doc_id': doc_id, 'status': record.get('status'),
+                        'note': '文档未被停用，无需恢复'}
+            catalog.set_status(doc_id, 'active')
+            catalog.record_audit('document_restore', detail={'doc_id': doc_id})
+        finally:
+            _close_catalog(catalog)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning('恢复文档失败 %s: %s', doc_id, exc)
+        raise HTTPException(status_code=503, detail=f'恢复文档失败：{exc}') from exc
+
+    if not publish:
+        return {'ok': True, 'doc_id': doc_id, 'status': 'active',
+                'note': '状态已恢复为 active，调用 POST /api/publish 后生效'}
+    from app.ingest.publish import publish_release
+
+    release = publish_release()
+    return {'ok': True, 'doc_id': doc_id, 'status': 'active',
+            'release_id': release.get('id'), 'doc_count': release.get('doc_count')}
