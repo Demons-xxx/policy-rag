@@ -588,6 +588,14 @@ test: 测试
 
 ## 更新记录
 
+### 0.2.1（2026-10-22，T1–T15 优化）
+
+- 检索：bge-reranker 重排、证据组装升级（数值优先/同条款合并/表格行对齐）、LRU 结果缓存、编码/重排 GPU 信号量。
+- 入库：DOCX 页图（Word COM → source.pdf）、版本链自动推断与手工覆盖、OCR/docling 后端。
+- 生成：拒答与引用后置校验、客户端重试与首 token 超时、分段耗时日志与 `/api/metrics`。
+- 前端：重新生成/导出 Markdown/会话重命名、资料库状态与部门筛选、文档详情与停用恢复。
+- 验收：177 tests、40 题 40/40、4 并发无 OOM。详见 [docs/优化计划.md](docs/优化计划.md)。
+
 ### 0.2.0
 
 - 架构：配置对象化（`app/settings.py`）、领域包（`app/domain/versions.py`）、发布存储（`app/store/releases.py`）、
