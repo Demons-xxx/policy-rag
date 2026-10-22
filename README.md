@@ -181,6 +181,11 @@ PDF 每页先走文本层（PyMuPDF 或 docling），文本数 < `POLICYRAG_OCR_
 - `npz`：向量存在 release 目录的 `vectors.npz`，单机全量加载，零外部依赖；适合小库/离线环境。
 - 切换后端后需要**重新发布**（或至少发布新 release），旧 release 的向量存储格式不同。
 
+#### 2.1.8 入库并发
+
+- 一次上传多份文件时按 `POLICYRAG_INGEST_CONCURRENCY`（默认 4）并发解析；docling 常驻进程内部仍串行（单 GPU 模型），pymupdf/docx 可真正并行。
+- 并发只影响解析阶段，发布（向量化/写 release）仍在单独任务里串行完成；单份失败不影响其他文件，失败原因逐条汇总到任务 `errors`。
+
 ---
 
 ## 3. 目录结构

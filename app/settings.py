@@ -80,6 +80,7 @@ class Settings:
     docling_device: str = 'cuda'
     docling_timeout: int = 600
     docling_serve: bool = True
+    ingest_concurrency: int = 4
     docx_preview: bool = True
     docx_preview_timeout: int = 120
     ocr_local: bool = True
@@ -205,6 +206,7 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
         docling_device=get('POLICYRAG_DOCLING_DEVICE', 'cuda').lower(),
         docling_timeout=_as_int(get('POLICYRAG_DOCLING_TIMEOUT', '600'), 600),
         docling_serve=get('POLICYRAG_DOCLING_SERVE', '1').lower() not in ('0', 'false', 'off', 'no'),
+        ingest_concurrency=_as_int(get('POLICYRAG_INGEST_CONCURRENCY', '4'), 4),
         docx_preview=get('POLICYRAG_DOCX_PREVIEW', '1').lower() not in ('0', 'false', 'off', 'no'),
         docx_preview_timeout=_as_int(get('POLICYRAG_DOCX_PREVIEW_TIMEOUT', '120'), 120),
         ocr_local=get('POLICYRAG_OCR_LOCAL', '1').lower() not in ('0', 'false', 'off', 'no'),

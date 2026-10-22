@@ -75,6 +75,7 @@ DOCLING_ARTIFACTS = _settings.docling_artifacts
 DOCLING_DEVICE = _settings.docling_device
 DOCLING_TIMEOUT = _settings.docling_timeout
 DOCLING_SERVE = _settings.docling_serve
+INGEST_CONCURRENCY = _settings.ingest_concurrency
 DOCX_PREVIEW = _settings.docx_preview
 DOCX_PREVIEW_TIMEOUT = _settings.docx_preview_timeout
 CACHE_SIZE = _settings.cache_size

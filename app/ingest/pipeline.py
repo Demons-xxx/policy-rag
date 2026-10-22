@@ -17,6 +17,7 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app import config
@@ -210,7 +211,14 @@ def run_job(job_id: str) -> None:
 
         docs: list[dict] = []
         errors: list[str] = []
-        for index, item in enumerate(files):
+        outcomes: dict[int, tuple[dict | None, str | None]] = {}
+        # 多文件并发解析：每个文件独立 ingest，进度按完成数回写；
+        # docling 常驻进程内部串行，pymupdf/docx 解析可并行。
+        workers = max(1, min(int(getattr(config, "INGEST_CONCURRENCY", 4) or 4), len(files)))
+        progress_lock = threading.Lock()
+        finished = 0
+
+        def _one(index: int, item: dict) -> tuple[int, dict | None, str | None]:
             name = item.get("name") or item.get("saved_name") or "文件"
             file_path = item.get("path")
             try:
@@ -220,20 +228,36 @@ def run_job(job_id: str) -> None:
                 parser_choice = file_meta.get("parser") if isinstance(file_meta, dict) else None
                 result = ingest_path(Path(file_path), meta=file_meta, job_id=job_id,
                                      parser=parser_choice)
-                docs.append({
+                doc = {
                     "doc_id": result["doc_id"],
                     "title": result.get("title"),
                     "unit_count": result.get("unit_count", 0),
                     "deduplicated": bool(result.get("deduplicated")),
                     "issues": result.get("issues") or [],
-                })
-            except Exception as exc:
-                errors.append(f"{name}：{exc}")
-            progress = int(round((index + 1) / max(len(files), 1) * 100))
-            catalog.update_job(
-                job_id, progress=progress,
-                message=f"已处理 {index + 1}/{len(files)} 份文件",
-            )
+                }
+                return index, doc, None
+            except Exception as exc:  # noqa: BLE001 - 单份失败不影响其他文件
+                return index, None, f"{name}：{exc}"
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ingest") as pool:
+            futures = [pool.submit(_one, index, item) for index, item in enumerate(files)]
+            for future in as_completed(futures):
+                index, doc, error = future.result()
+                outcomes[index] = (doc, error)
+                with progress_lock:
+                    finished += 1
+                    progress = int(round(finished / max(len(files), 1) * 100))
+                    catalog.update_job(
+                        job_id, progress=progress,
+                        message=f"已处理 {finished}/{len(files)} 份文件",
+                    )
+
+        for index in range(len(files)):
+            doc, error = outcomes.get(index, (None, "文件处理缺失"))
+            if doc is not None:
+                docs.append(doc)
+            if error:
+                errors.append(error)
 
         final_payload = dict(payload)
         final_payload["docs"] = docs
