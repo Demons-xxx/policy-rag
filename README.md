@@ -16,6 +16,7 @@
 7. [开发指南](#7-开发指南)
 8. [Git 协作](#8-git-协作)
 9. [已知限制与后续计划](#9-已知限制与后续计划)
+10. [在新工作区从零跑起来（迁移清单）](#10-在新工作区从零跑起来迁移清单)
 
 ---
 
@@ -67,17 +68,94 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
 
 技术组件：
 
-| 层 | 选型 | 说明 |
-|---|---|---|
-| 向量模型 | `BAAI/bge-base-zh-v1.5`（768 维） | 本地运行，约 400MB，CPU 也能跑 |
-| 向量库 | Chroma（默认）/ npz（回退） | Chroma 纯本地持久化，不需要 Docker |
-| 关键词检索 | jieba + 自建倒排 BM25 | 中文分词后做 BM25 打分 |
-| 元数据 | SQLite | 文档登记、任务、发布记录 |
-| 大模型 | 任意 OpenAI 兼容接口 | 通过 `.env` 配置 base_url / key / model |
-| 服务端 | FastAPI + uvicorn | 提供 HTTP 与流式问答 |
-| 前端 | Vue 3 + Vite | 对话、引用、PDF 预览、上传 |
+| 层 | 选型 | 位置 / 体积 | 说明 |
+|---|---|---|---|
+| 向量模型 | `BAAI/bge-base-zh-v1.5`（768 维） | `models/bge-base-zh-v1.5/`，约 391 MB | 本地运行，**必需**；CPU 也能跑 |
+| 重排模型 | `BAAI/bge-reranker-v2-m3`（Cross-Encoder） | `models/bge-reranker-v2-m3/`，约 2.2 GB | 建议安装；缺失自动关闭重排 |
+| 向量库 | Chroma（默认）/ npz（回退） | `data/vector_store/` 或 release 内 `vectors.npz` | Chroma 纯本地持久化，不需要 Docker |
+| 关键词检索 | jieba + 自建倒排 BM25 | 无模型文件 | 中文分词后做 BM25 打分 |
+| 元数据 | SQLite | `data/state/catalog.sqlite` | 文档登记、任务、发布记录 |
+| 大模型 | 任意 OpenAI 兼容接口 | `.env` 配置 | 必需；没有它只能检索不能生成 |
+| 扫描件 OCR | **外部 HTTP 服务**（不内置模型） | `POLICYRAG_OCR_ENDPOINT` | 可选；处理扫描件 PDF |
+| PDF 版式解析 | docling（外部解释器子进程） | 外部运行时 + `model/docling` 产物（约 367 MB） | 可选；默认用 pymupdf |
+| DOCX 页图 | 本机 Microsoft Word（COM） | 系统安装 | 可选；没有 Word 就跳过 |
+| 服务端 / 前端 | FastAPI + uvicorn / Vue 3 + Vite | `web/dist/` | 前端构建产物不进 Git |
 
 > 换大模型不用改代码：任何兼容 `POST /v1/chat/completions` 的服务都能接（DeepSeek、通义、vLLM、Ollama、LM Studio 等）。
+
+### 2.1 模型与服务清单（配置项对照）
+
+| 组件 | 默认位置 / 地址 | 关键配置项 | 不可用时的行为 |
+|---|---|---|---|
+| BGE 向量模型 | `models/bge-base-zh-v1.5` | `POLICYRAG_EMBEDDING_DIR`、`POLICYRAG_DEVICE` | 第一次检索/入库时报错；`/api/info` 的 `error` 字段会带原因 |
+| 重排模型 | `models/bge-reranker-v2-m3` | `POLICYRAG_RERANK=0/1`、`POLICYRAG_RERANK_MODEL_DIR`、`_TOP_N`、`_BATCH` | 模型缺失或加载失败：记一条 warning，回退到融合原排序，问答不受影响 |
+| 生成模型 | `.env` 的 `POLICYRAG_LLM_BASE_URL` | `..._MODEL`、`..._API_KEY`、`..._THINKING`、`RAG_LLM_RETRIES`、`RAG_LLM_FIRST_TOKEN_TIMEOUT` | `/api/info` 的 `model_ready=false`，问答返回「生成模型不可用」；重试策略见第 2.1.6 节 |
+| 扫描件 OCR | `POLICYRAG_OCR_ENDPOINT`（空 = 不做 OCR） | `POLICYRAG_OCR_DPI`、`_MIN_CHARS`、`_TIMEOUT`、`_MAX_PAGES` | 端点为空：扫描页保留原样并给「疑似扫描件」质量提示；端点失败：入库任务失败并给出「第 N 页 OCR 失败：原因」 |
+| docling 解析 | 默认尝试同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe` 与 `../RAG/model/docling` | `POLICYRAG_PARSER_PDF=docling`、`POLICYRAG_DOCLING_PYTHON`、`_ARTIFACTS`、`_DEVICE`、`_TIMEOUT` | 解释器不存在时入库报中文错误，提示设置 `POLICYRAG_DOCLING_PYTHON`；默认 `pymupdf` 不受影响 |
+| Word 页图 | 本机 Word 的 COM 接口 | `POLICYRAG_DOCX_PREVIEW=1/0`、`POLICYRAG_DOCX_PREVIEW_TIMEOUT` | 无 Word / 转换失败：DOCX 文本照常入库，只记一条 `docx_preview` 提示，`has_pdf=0` |
+| 向量库 | `POLICYRAG_VECTOR_BACKEND=chroma` 或 `npz` | — | chroma 不可用时可选 `npz`（零外部依赖，但全量加载进内存） |
+
+#### 2.1.1 BGE 向量模型（必需）
+
+- 模型：`BAAI/bge-base-zh-v1.5`，768 维中文检索模型，负责入库切片段后的向量化，以及提问时的查询向量。
+- 位置：默认 `models/bge-base-zh-v1.5/`；也可以放仓库外，用 `POLICYRAG_EMBEDDING_DIR` 指绝对路径（推荐多项目共用一个模型目录）。
+- 设备：`POLICYRAG_DEVICE=auto`（有 CUDA 用 CUDA，否则 CPU）；查询时会自动加 BGE 的检索前缀。
+- 换模型注意：换成不同维度的模型后，必须**重新发布**（旧 release 里的向量不可混用）。
+
+#### 2.1.2 重排模型（建议）
+
+- 模型：`BAAI/bge-reranker-v2-m3`，Cross-Encoder，对 RRF 融合后的前 `POLICYRAG_RERANK_TOP_N`（默认 20）个候选重打分；分数写入检索结果的 `scores.rerank`。
+- 设备：跟随 `POLICYRAG_DEVICE`；CUDA 下用 fp16，显存不足可设 `POLICYRAG_DEVICE=cpu`（慢一些但能用）。
+- 关闭：`POLICYRAG_RERANK=0`。关闭或模型缺失时系统仍可用，只是排序质量下降。
+- 与编码共用 GPU 并发信号量（`RAG_GPU_CONCURRENCY`，默认 2）：两张模型常驻显存，但同一时刻只有有限个推理在跑，避免并发请求把显存打满。
+
+#### 2.1.3 扫描件 OCR（可选，外部服务）
+
+- 本项目**不内置 OCR 模型**，只实现客户端：PDF 每页先走 PyMuPDF 文本层，文本数 < `POLICYRAG_OCR_MIN_CHARS`（默认 20）的页渲染成 PNG，POST 到 `POLICYRAG_OCR_ENDPOINT`。
+- 端点契约（与同盘 RAG 项目的 `remote_ocr.py` 完全一致，可直接复用同一个服务）：
+  - 请求：`multipart/form-data`，字段名 `image`；
+  - 响应：`{"code": 0, "result": "markdown 文本"}`；`code` 非 0 视为失败。
+- 配置：`POLICYRAG_OCR_ENDPOINT`、`POLICYRAG_OCR_DPI=200`、`POLICYRAG_OCR_MIN_CHARS=20`、`POLICYRAG_OCR_TIMEOUT=180`、`POLICYRAG_OCR_MAX_PAGES=100`。
+- 自测端点（任意一页 PNG）：
+  ```bash
+  curl -X POST http://127.0.0.1:8000/ocr -F "image=@page.png"
+  ```
+- 不配端点：能入库，扫描页会保留空文本并在问题清单里提示「疑似扫描件」，问答不会引用这些页。
+
+#### 2.1.4 docling 版式解析（可选，外部解释器）
+
+- 主环境**不安装 docling**（体积大、依赖重）。`scripts/docling_worker.py` 由外部「已装 docling 的 Python」执行，子进程读 PDF、写回统一 pages 结构，表格导出为 pipe 表格后由主项目切成 `table_row`。
+- 默认路径推导：同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe`（Linux 为 `../RAG/script/runtime/parse/bin/python`）与 `../RAG/model/docling`。没有这个同盘项目时，必须显式配置：
+  ```ini
+  POLICYRAG_PARSER_PDF=docling
+  POLICYRAG_DOCLING_PYTHON=D:/path/to/docling-venv/Scripts/python.exe
+  POLICYRAG_DOCLING_ARTIFACTS=D:/path/to/docling-model
+  POLICYRAG_DOCLING_DEVICE=cuda
+  POLICYRAG_DOCLING_TIMEOUT=600
+  ```
+- 手工验证（用带 docling 的解释器跑 worker）：
+  ```bash
+  D:/path/to/docling-venv/Scripts/python.exe scripts/docling_worker.py --input 样例.pdf --output out.json --device cuda --artifacts D:/path/to/docling-model
+  ```
+- 取舍：docling 对复杂版式/表格更准（本机 3 页样例约 4.2s），但比 pymupdf 慢；日常制度文件用默认 `pymupdf` 即可，扫描/复杂表格再切 docling。
+
+#### 2.1.5 Word 页图（可选，仅 Windows）
+
+- DOCX 没有「页」的概念，为了在前端预览原文页，入库时用本机 Word 的 COM 把 DOCX 另存为 `source.pdf`（`ExportAsFixedFormat`），再由 PyMuPDF 渲染页图。
+- 开关：`POLICYRAG_DOCX_PREVIEW=1`；超时 `POLICYRAG_DOCX_PREVIEW_TIMEOUT=120`。
+- 没装 Word：DOCX 文本照常入库，`has_pdf=0`，前端只显示文本证据；可稍后在装了 Word 的机器上运行 `python scripts/docx_preview.py` 补页图。
+
+#### 2.1.6 生成模型（必需）
+
+- 任何 OpenAI 兼容 `/chat/completions` 服务；`POLICYRAG_LLM_THINKING=disabled` 会发 `thinking: {"type":"disabled"}` 关掉推理型模型的思考，服务不认这个字段就改成 `none`。
+- 客户端自带韧性：连接错误/5xx/429/首 token 超时按 `RAG_LLM_RETRIES`（默认 2）指数退避重试；已经输出 token 后中断只报「回答未完成」，不会重复内容。
+- 零模型联调：`python scripts/mock_llm.py --port 8081`，`.env` 指 `http://127.0.0.1:8081/v1` 即可验证「检索 → 证据 → 流式输出 → 引用」全链路。
+
+#### 2.1.7 向量库（二选一）
+
+- `chroma`（默认）：发布时把片段向量写入 `data/vector_store/`，集合名 `policy_<release_id>`；适合文档量大、想减少内存占用。
+- `npz`：向量存在 release 目录的 `vectors.npz`，单机全量加载，零外部依赖；适合小库/离线环境。
+- 切换后端后需要**重新发布**（或至少发布新 release），旧 release 的向量存储格式不同。
 
 ---
 
@@ -571,7 +649,7 @@ test: 测试
 - **PDF 表格**：默认 PyMuPDF 只取文本层；需要版式/表格更强时可切 `POLICYRAG_PARSER_PDF=docling`（外部 docling 解释器，较慢，适合离线批量入库）；
 - **表格理解有限**：复杂合并单元格可能切分不理想；
 - **时效治理依赖人工元数据**：系统不会自动判断「哪份是新版」，需要在元数据里标注；
-- **单机单进程**：没有做多用户权限与并发压测；
+- **单机单进程**：没有多用户权限体系；并发只做了 4 请求的显存保护验证，没有做大规模压测；
 - **本地 27B 量化模型较慢**：单题约 40–70 秒（12GB 显卡混合推理）；接外部 API 后会明显变快，检索本身是亚秒级。
 
 本地实测记录（119 项单测、13 项冒烟、12 项验收、40 题评测 39/40）见 [docs/验收记录.md](docs/验收记录.md)。
@@ -586,6 +664,191 @@ test: 测试
 
 ---
 
+## 10. 在新工作区从零跑起来（迁移清单）
+
+这一节是给「把代码拉到另一台机器 / 另一个目录」准备的。仓库**不含**虚拟环境、模型、
+运行数据、前端构建产物和 `.env`，所以下面这些要单独准备。
+
+### 10.1 先看清哪些要准备
+
+| 项 | 是否必需 | 说明 |
+|---|---|---|
+| Python 3.10+ | 必需 | 后端运行环境；建议 3.10/3.11 |
+| Git | 必需 | 拉代码 |
+| BGE 向量模型（391 MB） | 必需 | 放 `models/bge-base-zh-v1.5/` 或配置外置路径 |
+| 生成模型（OpenAI 兼容） | 必需 | 外部 API 或本地服务，填 `.env` |
+| 重排模型（2.2 GB） | 建议 | 缺失自动关闭重排，质量略降 |
+| 模型/数据目录写权限 | 必需 | `models/`、`data/`、`log/` 要可写 |
+| Node.js 20/22 | 改前端才需要 | 构建 `web/dist` |
+| Microsoft Word | 可选 | 仅 DOCX 页图预览 |
+| docling 外部解释器 | 可选 | 仅 `POLICYRAG_PARSER_PDF=docling` 时需要 |
+| OCR 服务端点 | 可选 | 仅扫描件 PDF 需要 |
+| NVIDIA GPU + CUDA | 可选 | CPU 也能跑，只是编码/重排慢 |
+
+### 10.2 拉代码 + 安装依赖
+
+```bash
+git clone <仓库地址>
+cd PolicyRAG
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+要用显卡（推荐）：
+
+```bash
+.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+验证：
+
+```bash
+.venv\Scripts\python.exe -c "import fastapi, chromadb, fitz, jieba, torch; print('ok', torch.cuda.is_available())"
+```
+
+### 10.3 模型：下载或直接拷贝
+
+两个模型都可以从旧机器整目录拷贝（最快），也可以按下面命令下载：
+
+```bash
+.venv\Scripts\python.exe -m pip install -U huggingface_hub
+# 国内网络可加镜像
+set HF_ENDPOINT=https://hf-mirror.com            # PowerShell: $env:HF_ENDPOINT="https://hf-mirror.com"
+.venv\Scripts\python.exe -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-base-zh-v1.5', local_dir='models/bge-base-zh-v1.5')"
+.venv\Scripts\python.exe -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-reranker-v2-m3', local_dir='models/bge-reranker-v2-m3')"
+```
+
+- 找不到 `pytorch_model.bin`/`model.safetensors` 就说明没下完；`models/` 已被 Git 忽略，不会误提交。
+- 模型不必放在仓库里：用 `POLICYRAG_EMBEDDING_DIR`、`POLICYRAG_RERANK_MODEL_DIR` 指绝对路径即可（多项目共用一份最省磁盘）。
+
+### 10.4 配置 `.env`
+
+```bash
+copy .env.example .env      # Windows
+cp .env.example .env        # macOS / Linux
+```
+
+最小可用配置（生成模型 + 默认本地模型目录）：
+
+```ini
+POLICYRAG_LLM_BASE_URL=https://api.example.com/v1
+POLICYRAG_LLM_API_KEY=sk-你的密钥
+POLICYRAG_LLM_MODEL=模型名称
+```
+
+常用项一览（完整注释见 `.env.example`）：
+
+| 分组 | 变量 | 默认 | 说明 |
+|---|---|---|---|
+| 生成 | `POLICYRAG_LLM_BASE_URL` / `_MODEL` / `_API_KEY` | 本地 8081 / Qwen3.8-27B / 空 | 必填 |
+| 生成 | `POLICYRAG_LLM_THINKING` | `disabled` | 推理型模型关闭思考；不认则 `none` |
+| 生成 | `RAG_LLM_RETRIES` / `RAG_LLM_FIRST_TOKEN_TIMEOUT` | 2 / 60 | 重试次数与首 token 等待秒数 |
+| 并发 | `RAG_GPU_CONCURRENCY` | 2 | 编码/重排共享的 GPU 并发上限 |
+| 向量 | `POLICYRAG_VECTOR_BACKEND` | `chroma` | 或 `npz` |
+| 向量 | `POLICYRAG_EMBEDDING_DIR` | `models/bge-base-zh-v1.5` | 可绝对路径 |
+| 设备 | `POLICYRAG_DEVICE` | `auto` | `cuda` / `cpu` |
+| 重排 | `POLICYRAG_RERANK` / `_MODEL_DIR` / `_TOP_N` / `_BATCH` | 1 / `models/bge-reranker-v2-m3` / 20 / 16 | 关掉重排设 `0` |
+| OCR | `POLICYRAG_OCR_ENDPOINT` / `_DPI` / `_MIN_CHARS` / `_TIMEOUT` / `_MAX_PAGES` | 空 / 200 / 20 / 180 / 100 | 空 = 不做 OCR |
+| docling | `POLICYRAG_PARSER_PDF` / `_DOCLING_PYTHON` / `_ARTIFACTS` / `_DEVICE` / `_TIMEOUT` | `pymupdf` / 同盘 RAG / 同盘 RAG / `cuda` / 600 | 只有显式切 docling 才用 |
+| DOCX 页图 | `POLICYRAG_DOCX_PREVIEW` / `_TIMEOUT` | 1 / 120 | 无 Word 会自动跳过 |
+| 缓存 | `RAG_CACHE_SIZE` | 256 | 检索结果 LRU 条数 |
+| 服务 | `POLICYRAG_HOST` / `POLICYRAG_PORT` | 127.0.0.1 / 7880 | 端口被占用时改这里 |
+
+> 说明：`POLICYRAG_*` 是主前缀；`RAG_LLM_*`、`RAG_GPU_CONCURRENCY`、`RAG_CACHE_SIZE` 是后来加的通用项（历史原因没有统一前缀），按 `.env.example` 原样写即可。
+> `.env` 用 UTF-8 保存，不要提交到 Git。
+
+### 10.5 数据：全新入库，还是把旧数据搬过来
+
+**A. 全新环境（推荐先跑通）**：直接灌样例，生成新的 release。
+
+```bash
+.venv\Scripts\python.exe scripts/ingest.py knowledge/samples --publish
+```
+
+**B. 搬旧数据**（想保留已发布的 release / 文档登记）：
+
+复制这些到新机器的相同相对位置：
+
+| 路径 | 内容 |
+|---|---|
+| `data/releases/<release_id>/` | 发布的 units/passages/vectors/manifest |
+| `data/state/catalog.sqlite` | 文档登记、任务、发布记录 |
+| `data/state/active_release.json` | 当前生效指针 |
+| `data/docs/<doc_id>/` | 每份文档的原文、units、缓存向量 |
+| `data/vector_store/` | chroma 持久化（用 chroma 时） |
+
+**关键坑**：`data/state/active_release.json` 里的 `dir` 是**绝对路径**（例如 `D:\Work\PolicyRAG\data\releases\rel-...`）。
+换盘符/换用户名后必须二选一：
+
+1. 手工把 `dir` 改成新机器上的绝对路径；或
+2. 调用 `POST /api/releases/{id}/activate` 重新激活，或重新 `python scripts/ingest.py ... --publish` 发布一次。
+
+### 10.6 前端（只有需要改前端 / 没有 dist 时）
+
+`web/dist` 不进 Git。新机器上如果要页面：
+
+```bash
+cd web
+npm install          # 或 pnpm install
+npm run build        # 产物 web/dist，后端会自动托管
+```
+
+Node 20/22 均可（本机验证的是 Node 22）。
+
+### 10.7 启动与验收
+
+```bash
+.venv\Scripts\python.exe start.py install   # 首次：检查环境、装依赖、构建前端
+.venv\Scripts\python.exe start.py           # 启动并打开网页
+```
+
+没有页面也能验收：
+
+```bash
+curl http://127.0.0.1:7880/api/info            # version、release_id、doc_count、model_ready
+curl http://127.0.0.1:7880/api/metrics         # 请求数、错误率、P50/P95
+.venv\Scripts\python.exe scripts/smoke_test.py
+```
+
+提问验收（应返回流式 NDJSON，最后带 sources）：
+
+```bash
+curl -N -X POST http://127.0.0.1:7880/api/ask -H "Content-Type: application/json" -d "{\"question\": \"实验室危险化学品怎么领用？\", \"history\": []}"
+```
+
+离线评测：
+
+```bash
+.venv\Scripts\python.exe scripts/evaluate.py --dry-run
+.venv\Scripts\python.exe scripts/evaluate.py --limit 5
+```
+
+### 10.8 新环境常见问题
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 启动报「找不到向量模型」 | `models/` 没拷或路径不对 | 下载/拷贝，或配 `POLICYRAG_EMBEDDING_DIR` |
+| 回答出现「生成模型不可用」 | `.env` 三项填错 / 服务没起 | 检查 base_url、key、model；`/api/info` 看 `model_ready` |
+| 页面白屏 | 没有 `web/dist` | `cd web && npm install && npm run build` |
+| 扫描件入库后没有内容 | OCR 端点未配置 | 配 `POLICYRAG_OCR_ENDPOINT` 或换带文本层的 PDF |
+| 启用 docling 后入库报错 | 外部解释器不存在 | 配 `POLICYRAG_DOCLING_PYTHON`，或改回 `pymupdf` |
+| DOCX 没有原文页 | 本机没装 Word | 装 Word 后运行 `scripts/docx_preview.py`，或只看文本证据 |
+| 换机器后问答提示 release 不存在 | `active_release.json` 里是旧绝对路径 | 改 `dir` 或重新发布/激活 |
+| 显存不足 | 两个模型 + 并发占满 | `RAG_GPU_CONCURRENCY=1`、`POLICYRAG_DEVICE=cpu` 或关重排 |
+| 端口被占用 | 7880 被别的程序占了 | 改 `POLICYRAG_PORT`，或先 `start.py stop` |
+| 中文路径报错 | 个别依赖对中文路径敏感 | 把项目放到纯英文路径（如 `D:/Work/PolicyRAG`） |
+
+### 10.9 最快的整机迁移方式
+
+如果两台机器目录结构一致，直接整包拷贝（排除虚拟环境与依赖缓存）最省事：
+
+```bash
+robocopy D:\Work\PolicyRAG E:\Work\PolicyRAG /E /XD .venv node_modules __pycache__ .pytest_cache log
+```
+
+拷完在新机器上重建 `.venv` 并 `pip install -r requirements.txt`；`models/`、`data/`、`.env`、`web/dist`
+都在包里，直接 `start.py` 即可。如果换了盘符，记得按 10.5 修正 `active_release.json` 的 `dir`。
+
 ## 更新记录
 
 ### 0.2.1（2026-10-22，T1–T15 优化）
@@ -595,6 +858,7 @@ test: 测试
 - 生成：拒答与引用后置校验、客户端重试与首 token 超时、分段耗时日志与 `/api/metrics`。
 - 前端：重新生成/导出 Markdown/会话重命名、资料库状态与部门筛选、文档详情与停用恢复。
 - 验收：177 tests、40 题 40/40、4 并发无 OOM。详见 [docs/优化计划.md](docs/优化计划.md)。
+- 文档：README 新增「模型与服务清单」（BGE/重排/OCR/docling/Word/LLM 的配置与接入）与「新工作区迁移清单」。
 
 ### 0.2.0
 
