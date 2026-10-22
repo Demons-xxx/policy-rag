@@ -154,6 +154,25 @@ def publish(record: dict, units: list[dict], issues: list[dict], parsed: dict,
             raise RuntimeError(f"复制原文失败：{exc}") from exc
 
     record = dict(record)
+    # DOCX 页图：用 Word COM 另存一份 source.pdf，前端即可预览原文页；
+    # 失败只记一条不阻断的提示，不影响 DOCX 文本入库。
+    if (source_path is not None and record.get("format") == "docx"
+            and getattr(config, "DOCX_PREVIEW", True)):
+        from app.ingest import office
+
+        preview = doc_dir / "source.pdf"
+        ok, reason = office.convert_docx_to_pdf(
+            source_path, preview, timeout=float(getattr(config, "DOCX_PREVIEW_TIMEOUT", 120) or 120))
+        if ok:
+            pages = office.pdf_pages(preview) or int(record.get("pages") or 1)
+            record["has_pdf"] = 1
+            record["pages"] = pages
+        else:
+            issues.append({
+                "level": "warn", "code": "docx_preview", "message": f"DOCX 页图生成失败：{reason}",
+                "page": None, "blocking": False,
+            })
+
     record["source_path"] = relative_path(source_path) if source_path is not None else None
     record["imported_at"] = now_iso()
 

@@ -69,6 +69,8 @@ DOCLING_PYTHON = _settings.docling_python
 DOCLING_ARTIFACTS = _settings.docling_artifacts
 DOCLING_DEVICE = _settings.docling_device
 DOCLING_TIMEOUT = _settings.docling_timeout
+DOCX_PREVIEW = _settings.docx_preview
+DOCX_PREVIEW_TIMEOUT = _settings.docx_preview_timeout
 
 
 def env(name: str, default: str = '') -> str:

@@ -280,7 +280,9 @@ def test_quality_duplicate_and_missing_article(project):
 
 
 # ------------------------------------------------------------------ 入库
-def test_ingest_path_and_dedupe(project, tmp_path):
+def test_ingest_path_and_dedupe(project, tmp_path, monkeypatch):
+    # 本测试关心入库/去重语义，不依赖本机 Word：关闭 DOCX 页图（默认开启）。
+    monkeypatch.setattr(config, "DOCX_PREVIEW", False)
     path = make_samples.build_docx(tmp_path)
     meta = {
         "title": "XX大学科研经费报销实施细则",

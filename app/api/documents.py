@@ -99,6 +99,27 @@ def _source_path(record: dict) -> Path | None:
     return None
 
 
+def _pdf_path(record: dict) -> Path | None:
+    """定位可预览的 PDF：DOCX 的页图是另存的 source.pdf，优先于 source.docx。"""
+    record = record or {}
+    doc_id = str(record.get('doc_id') or '')
+    candidates: list[Path] = []
+    raw = record.get('source_path')
+    if raw:
+        path = Path(raw)
+        path = path if path.is_absolute() else config.ROOT / path
+        if path.suffix.lower() == '.pdf':
+            candidates.append(path)
+        else:
+            candidates.append(path.with_name('source.pdf'))
+    if doc_id:
+        candidates.append(Path(config.DOCS_DIR) / doc_id / 'source.pdf')
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def _close_catalog(catalog) -> None:
     closer = getattr(catalog, 'close', None)
     if callable(closer):
@@ -145,8 +166,8 @@ def api_documents() -> dict:
 @router.get('/documents/{doc_id}/pdf')
 def api_document_pdf(doc_id: str) -> FileResponse:
     record = _document(doc_id)
-    path = _source_path(record)
-    if path is None or path.suffix.lower() != '.pdf':
+    path = _pdf_path(record)
+    if path is None:
         raise HTTPException(status_code=404, detail='该文档没有可预览的 PDF 原件')
     return FileResponse(
         path,
@@ -166,8 +187,8 @@ def api_document_page_image(doc_id: str, page: str) -> Response:
         raise HTTPException(status_code=404, detail='页码从 1 开始')
 
     record = _document(doc_id)
-    path = _source_path(record)
-    if path is None or path.suffix.lower() != '.pdf':
+    path = _pdf_path(record)
+    if path is None:
         raise HTTPException(status_code=404, detail='该文档没有可渲染的 PDF 原件')
 
     try:
