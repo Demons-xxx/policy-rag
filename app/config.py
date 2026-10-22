@@ -58,6 +58,18 @@ RERANK_MODEL_DIR = _settings.rerank_model_dir
 RERANK_TOP_N = _settings.rerank_top_n
 RERANK_BATCH = _settings.rerank_batch
 
+# ---- 入库解析：扫描件 OCR 与可选 docling 后端 ----
+OCR_ENDPOINT = _settings.ocr_endpoint
+OCR_DPI = _settings.ocr_dpi
+OCR_MIN_CHARS = _settings.ocr_min_chars
+OCR_TIMEOUT = _settings.ocr_timeout
+OCR_MAX_PAGES = _settings.ocr_max_pages
+PARSER_PDF = _settings.parser_pdf
+DOCLING_PYTHON = _settings.docling_python
+DOCLING_ARTIFACTS = _settings.docling_artifacts
+DOCLING_DEVICE = _settings.docling_device
+DOCLING_TIMEOUT = _settings.docling_timeout
+
 
 def env(name: str, default: str = '') -> str:
     value = os.environ.get(name)

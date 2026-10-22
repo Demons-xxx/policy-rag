@@ -65,6 +65,18 @@ def check_units(units: list[dict], parsed: dict) -> list[dict]:
                 page_no,
             ))
 
+    # 1.1) OCR 页质量提示（不阻断，供人工复核）
+    for page in pages:
+        codes = page.get("ocr_issues") or []
+        if not codes:
+            continue
+        page_no = int(page.get("no") or 1)
+        issues.append(_issue(
+            "ocr_quality",
+            f"第 {page_no} 页由 OCR 识别，质量提示：{'、'.join(str(code) for code in codes)}，建议人工核对原文。",
+            page_no,
+        ))
+
     # 2) 全文字符数与无正文判断
     total_chars = sum(len((page.get("text") or "").strip()) for page in pages)
     unit_chars = sum(len((unit.get("text") or "").strip()) for unit in units or [])

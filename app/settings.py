@@ -65,6 +65,17 @@ class Settings:
     rerank_model_dir: Path = field(default=None)  # type: ignore[assignment]
     rerank_top_n: int = 20
     rerank_batch: int = 16
+    # 入库解析：扫描件 OCR 与可选 docling 后端
+    ocr_endpoint: str = ''
+    ocr_dpi: int = 200
+    ocr_min_chars: int = 20
+    ocr_timeout: int = 180
+    ocr_max_pages: int = 100
+    parser_pdf: str = 'pymupdf'
+    docling_python: Path = field(default=None)  # type: ignore[assignment]
+    docling_artifacts: Path = field(default=None)  # type: ignore[assignment]
+    docling_device: str = 'cuda'
+    docling_timeout: int = 600
     # 服务
     host: str = '127.0.0.1'
     port: int = 7880
@@ -117,6 +128,17 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
     rerank_dir = Path(get('POLICYRAG_RERANK_MODEL_DIR', '') or rerank_default)
     if not rerank_dir.is_absolute():
         rerank_dir = root / rerank_dir
+    # 同盘 RAG 项目里的 docling 运行时与模型：存在就默认复用，不存在则留空。
+    sibling = root.parent / 'RAG'
+    docling_runtime = (sibling / 'local_service' / 'runtime' / 'parse' / 'Scripts' / 'python.exe'
+                       if os.name == 'nt'
+                       else sibling / 'script' / 'runtime' / 'parse' / 'bin' / 'python')
+    docling_python = Path(get('POLICYRAG_DOCLING_PYTHON', '') or docling_runtime)
+    if str(docling_python) and not docling_python.is_absolute():
+        docling_python = root / docling_python
+    docling_artifacts = Path(get('POLICYRAG_DOCLING_ARTIFACTS', '') or (sibling / 'model' / 'docling'))
+    if not docling_artifacts.is_absolute():
+        docling_artifacts = root / docling_artifacts
 
     return Settings(
         root=root,
@@ -147,6 +169,16 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
         rerank_model_dir=rerank_dir,
         rerank_top_n=_as_int(get('POLICYRAG_RERANK_TOP_N', '20'), 20),
         rerank_batch=_as_int(get('POLICYRAG_RERANK_BATCH', '16'), 16),
+        ocr_endpoint=get('POLICYRAG_OCR_ENDPOINT', ''),
+        ocr_dpi=_as_int(get('POLICYRAG_OCR_DPI', '200'), 200),
+        ocr_min_chars=_as_int(get('POLICYRAG_OCR_MIN_CHARS', '20'), 20),
+        ocr_timeout=_as_int(get('POLICYRAG_OCR_TIMEOUT', '180'), 180),
+        ocr_max_pages=_as_int(get('POLICYRAG_OCR_MAX_PAGES', '100'), 100),
+        parser_pdf=get('POLICYRAG_PARSER_PDF', 'pymupdf').lower(),
+        docling_python=docling_python,
+        docling_artifacts=docling_artifacts,
+        docling_device=get('POLICYRAG_DOCLING_DEVICE', 'cuda').lower(),
+        docling_timeout=_as_int(get('POLICYRAG_DOCLING_TIMEOUT', '600'), 600),
         host=get('POLICYRAG_HOST', '127.0.0.1'),
         port=_as_int(get('POLICYRAG_PORT', '7880'), 7880),
         max_history_chars=_as_int(get('POLICYRAG_MAX_HISTORY_CHARS', '6000'), 6000),

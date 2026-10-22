@@ -19,8 +19,11 @@ Stage 3 起解析器按扩展名注册在 ``app.ingest.registry.PARSE_REGISTRY``
 """
 from __future__ import annotations
 
+import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
+
+from app import config
 
 FORMAT_BY_SUFFIX = {
     ".pdf": "pdf",
@@ -68,6 +71,12 @@ def _read_text(path: Path) -> str:
 
 
 def _parse_pdf(path: Path) -> dict:
+    if str(getattr(config, "PARSER_PDF", "pymupdf")).lower() == "docling":
+        from app.ingest import docling as docling_backend
+
+        parsed = docling_backend.parse_pdf(path)
+        return _apply_page_ocr(parsed, path)
+
     try:
         import fitz  # pymupdf
     except ImportError as exc:  # pragma: no cover - 环境已装
@@ -91,7 +100,7 @@ def _parse_pdf(path: Path) -> dict:
     finally:
         document.close()
 
-    return {
+    parsed = {
         "format": "pdf",
         "pages": pages,
         "has_pdf": True,
@@ -99,6 +108,67 @@ def _parse_pdf(path: Path) -> dict:
         "tables": [],
         "parser": PARSER_NAME["pdf"],
     }
+    return _apply_page_ocr(parsed, path)
+
+
+def _apply_page_ocr(parsed: dict, path: Path) -> dict:
+    """扫描页兜底：文本层不足的页渲染成 PNG，走 OCR 端点替换页文本。
+
+    端点未配置时原样返回（质量检查仍会给出「疑似扫描件」提示）；
+    端点失败直接抛中文 RuntimeError，让入库任务失败得可解释。
+    """
+    endpoint = str(getattr(config, "OCR_ENDPOINT", "") or "").strip()
+    if not endpoint:
+        return parsed
+    pages = parsed.get("pages") or []
+    threshold = int(getattr(config, "OCR_MIN_CHARS", 20) or 0)
+    targets = [page for page in pages
+               if len(str(page.get("text") or "").strip()) < threshold]
+    if not targets:
+        return parsed
+
+    import fitz
+
+    from app.ingest.ocr import OcrClient, OcrError, quality_issues
+
+    client = OcrClient(endpoint, timeout=float(getattr(config, "OCR_TIMEOUT", 180) or 180))
+    limit = int(getattr(config, "OCR_MAX_PAGES", 100) or 0)
+    if limit:
+        targets = targets[:limit]
+    done = 0
+    issue_pages: list[int] = []
+    uploads = Path(getattr(config, "UPLOADS_DIR", ""))
+    temp_parent = str(uploads) if uploads.is_dir() else None
+    with tempfile.TemporaryDirectory(prefix="ocr-", dir=temp_parent) as folder:
+        document = fitz.open(str(path))
+        try:
+            for page in targets:
+                number = int(page.get("no") or 0)
+                if number < 1 or number > document.page_count:
+                    continue
+                pixmap = document[number - 1].get_pixmap(
+                    dpi=int(getattr(config, "OCR_DPI", 200) or 200))
+                image = Path(folder) / f"page-{number}.png"
+                pixmap.save(str(image))
+                try:
+                    text, meta = client.recognize(image)
+                except OcrError as exc:
+                    raise RuntimeError(f"第 {number} 页 OCR 失败：{exc}") from exc
+                page["text"] = text
+                page["ocr"] = True
+                page["ocr_meta"] = meta
+                issues = quality_issues(text)
+                if issues:
+                    page["ocr_issues"] = issues
+                    issue_pages.append(number)
+                done += 1
+        finally:
+            document.close()
+    parsed["ocr_pages"] = done
+    if issue_pages:
+        parsed["ocr_issue_pages"] = issue_pages
+    return parsed
+
 
 
 def _cell_text(cell) -> str:
