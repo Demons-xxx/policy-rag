@@ -218,7 +218,9 @@ def test_chat_client_stream_parses_sse():
                               headers={'content-type': 'text/event-stream'})
 
     client = ChatClient('http://mock.local/v1', 'fake-qwen')
-    client._client = httpx.Client(transport=httpx.MockTransport(handler))
+    fake = httpx.Client(transport=httpx.MockTransport(handler))
+    client._client = fake
+    client._stream_client = fake  # 流式请求走独立客户端（T11 首 token 超时）
     assert ''.join(client.stream([{'role': 'user', 'content': 'hi'}])) == '危险化学品须审批'
 
 

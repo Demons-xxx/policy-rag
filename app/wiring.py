@@ -49,6 +49,8 @@ class Runtime:
                     model=config.LLM_MODEL,
                     api_key=config.LLM_API_KEY,
                     thinking=config.LLM_THINKING,
+                    retries=config.LLM_RETRIES,
+                    first_token_timeout=config.LLM_FIRST_TOKEN_TIMEOUT,
                 )
             return self._llm
 

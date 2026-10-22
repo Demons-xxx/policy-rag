@@ -3,17 +3,23 @@
 - 只用 httpx，不引入额外依赖；
 - `stream()` 逐行解析 `data: {...}`，产出 `choices[0].delta.content` 增量；
 - 所有异常统一抛 `RuntimeError("生成模型不可用：...")`；
+- 韧性（T11）：连接错误 / 5xx / 429 / 首 token 超时会按 `retries` 指数退避重试；
+  已输出 token 后的中断不重试（避免重复内容），直接报「回答未完成」；
 - `ready()` 用 `GET {base_url}/models` 做 2 秒健康检查，失败时用一次极小
   对话请求兜底（部分 OpenAI 兼容服务没有 /models）。
 """
 from __future__ import annotations
 
 import json
+import time
 from typing import Iterator
 
 import httpx
 
 ERROR_PREFIX = '生成模型不可用：'
+DEFAULT_RETRIES = 2
+DEFAULT_FIRST_TOKEN_TIMEOUT = 60.0
+RETRY_BACKOFF = 0.4  # 秒；第 n 次重试等待 RETRY_BACKOFF * 2**n
 
 
 def _brief(text: str, limit: int = 200) -> str:
@@ -47,13 +53,33 @@ def _content_text(content) -> str:
     return str(content)
 
 
+class _Retryable(Exception):
+    """尚未产出任何 token 的可重试错误。"""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class _Incomplete(Exception):
+    """已产出 token 后中断：重试会造成重复内容，只能如实报未完成。"""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class ChatClient:
     def __init__(self, base_url: str, model: str, api_key: str = '', timeout: float = 120,
-                 thinking: str = 'disabled') -> None:
+                 thinking: str = 'disabled', retries: int = DEFAULT_RETRIES,
+                 first_token_timeout: float = DEFAULT_FIRST_TOKEN_TIMEOUT,
+                 transport: httpx.BaseTransport | None = None) -> None:
         self.base_url = (base_url or '').rstrip('/')
         self.model = model
         self.api_key = api_key or ''
         self.timeout = float(timeout)
+        self.retries = max(0, int(retries if retries is not None else DEFAULT_RETRIES))
+        self.first_token_timeout = max(1.0, float(first_token_timeout or DEFAULT_FIRST_TOKEN_TIMEOUT))
         # 推理型模型（如 deepseek / doubao）默认关闭思考过程，避免答案被思考 token 吃掉；
         # 设为 none 表示不发送该参数（部分 OpenAI 兼容服务不认这个字段）。
         self.thinking = (thinking or 'none').strip().lower()
@@ -62,7 +88,11 @@ class ChatClient:
         if self.api_key:
             self._headers['Authorization'] = f'Bearer {self.api_key}'
         self._client = httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10.0),
-                                    headers=self._headers)
+                                    headers=self._headers, transport=transport)
+        # 流式请求单独限制「首 token 等待」：连接与普通请求仍用 timeout
+        self._stream_client = httpx.Client(
+            timeout=httpx.Timeout(self.timeout, connect=10.0, read=self.first_token_timeout),
+            headers=self._headers, transport=transport)
 
     def _payload(self, messages: list[dict], max_tokens: int, temperature: float,
                  stream: bool) -> dict:
@@ -86,11 +116,15 @@ class ChatClient:
     def _url(self, path: str) -> str:
         return f'{self.base_url}/{path.lstrip("/")}'
 
+    def _sleep_before_retry(self, attempt: int) -> None:
+        time.sleep(RETRY_BACKOFF * (2 ** attempt))
+
     def close(self) -> None:
-        try:
-            self._client.close()
-        except Exception:
-            pass
+        for client in (self._client, self._stream_client):
+            try:
+                client.close()
+            except Exception:
+                pass
 
     # ---- 契约方法 ----
     def stream(self, messages: list[dict], max_tokens: int = 1024,
@@ -98,11 +132,38 @@ class ChatClient:
         if not self.base_url:
             raise self._fail('未配置模型地址（POLICYRAG_LLM_BASE_URL）')
         payload = self._payload(messages, max_tokens, temperature, stream=True)
+        attempts = self.retries + 1
+        last_reason = ''
+        for attempt in range(attempts):
+            yielded = False
+            try:
+                for piece in self._stream_once(payload):
+                    yielded = True
+                    yield piece
+            except _Retryable as exc:
+                last_reason = exc.reason
+                if yielded:
+                    raise self._fail(f'回答未完成：{exc.reason}') from exc
+                if attempt >= attempts - 1:
+                    break
+                self._sleep_before_retry(attempt)
+                continue
+            except _Incomplete as exc:
+                raise self._fail(f'回答未完成：{exc.reason}') from exc
+            self.last_error = ''
+            return
+        raise self._fail(f'{last_reason}（已重试 {self.retries} 次）')
+
+    def _stream_once(self, payload: dict) -> Iterator[str]:
         try:
-            with self._client.stream('POST', self._url('chat/completions'), json=payload) as response:
+            with self._stream_client.stream(
+                    'POST', self._url('chat/completions'), json=payload) as response:
                 if response.status_code >= 400:
                     body = response.read().decode('utf-8', 'replace')
-                    raise self._fail(f'HTTP {response.status_code} {_brief(body)}')
+                    reason = f'HTTP {response.status_code} {_brief(body)}'
+                    if response.status_code >= 500 or response.status_code == 429:
+                        raise _Retryable(reason)
+                    raise self._fail(reason)
                 for raw_line in response.iter_lines():
                     line = (raw_line or '').strip()
                     if not line or line.startswith(':') or not line.startswith('data:'):
@@ -132,10 +193,14 @@ class ChatClient:
                             text = _content_text((choice.get('message') or {}).get('content'))
                             if text:
                                 yield text
-        except RuntimeError:
+        except (RuntimeError, _Retryable, _Incomplete):
             raise
-        except Exception as exc:  # httpx 网络错误、读流中断、JSON 异常等
-            raise self._fail(_reason(exc)) from exc
+        except httpx.TimeoutException as exc:
+            raise _Retryable(f'等待模型响应超时（{self.first_token_timeout:g}s）：{_reason(exc)}') from exc
+        except httpx.HTTPError as exc:  # 连接失败、读流中断、协议错误等
+            raise _Retryable(f'无法连接模型服务：{_reason(exc)}') from exc
+        except Exception as exc:  # 兜底：编码等异常
+            raise _Retryable(_reason(exc)) from exc
 
     def complete(self, messages: list[dict], max_tokens: int = 512,
                  temperature: float = 0.1) -> str:
@@ -148,12 +213,30 @@ class ChatClient:
             'max_tokens': int(max_tokens),
             'temperature': float(temperature),
         }
-        try:
-            response = self._client.post(self._url('chat/completions'), json=payload)
-        except Exception as exc:
-            raise self._fail(_reason(exc)) from exc
-        if response.status_code >= 400:
-            raise self._fail(f'HTTP {response.status_code} {_brief(response.text)}')
+        attempts = self.retries + 1
+        last_reason = ''
+        response = None
+        for attempt in range(attempts):
+            try:
+                response = self._client.post(self._url('chat/completions'), json=payload)
+            except httpx.HTTPError as exc:
+                last_reason = f'无法连接模型服务：{_reason(exc)}'
+                if attempt < attempts - 1:
+                    self._sleep_before_retry(attempt)
+                    continue
+                break
+            if response.status_code >= 400:
+                reason = f'HTTP {response.status_code} {_brief(response.text)}'
+                if response.status_code >= 500 or response.status_code == 429:
+                    last_reason = reason
+                    if attempt < attempts - 1:
+                        self._sleep_before_retry(attempt)
+                        continue
+                    break
+                raise self._fail(reason)
+            break
+        if response is None or response.status_code >= 400:
+            raise self._fail(f'{last_reason}（已重试 {self.retries} 次）')
         try:
             data = response.json()
         except Exception as exc:

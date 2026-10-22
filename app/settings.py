@@ -53,6 +53,8 @@ class Settings:
     llm_api_key: str = ''
     llm_model: str = 'Qwen3.8-27B'
     llm_thinking: str = 'disabled'
+    llm_retries: int = 2
+    llm_first_token_timeout: float = 60.0
     # 检索与向量
     vector_backend: str = 'chroma'
     device: str = 'auto'
@@ -162,6 +164,8 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
         llm_api_key=get('POLICYRAG_LLM_API_KEY', ''),
         llm_model=get('POLICYRAG_LLM_MODEL', 'Qwen3.8-27B'),
         llm_thinking=get('POLICYRAG_LLM_THINKING', 'disabled').lower(),
+        llm_retries=_as_int(get('RAG_LLM_RETRIES', '2'), 2),
+        llm_first_token_timeout=_as_float(get('RAG_LLM_FIRST_TOKEN_TIMEOUT', '60'), 60.0),
         vector_backend=get('POLICYRAG_VECTOR_BACKEND', 'chroma').lower(),
         device=get('POLICYRAG_DEVICE', 'auto').lower(),
         embedding_dir=embedding,

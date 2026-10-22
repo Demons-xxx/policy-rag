@@ -37,6 +37,8 @@ LLM_API_KEY = _settings.llm_api_key
 LLM_MODEL = _settings.llm_model
 # 推理型模型是否输出思考过程：disabled（默认）/ enabled / auto / none（不发送该参数）
 LLM_THINKING = _settings.llm_thinking
+LLM_RETRIES = _settings.llm_retries
+LLM_FIRST_TOKEN_TIMEOUT = _settings.llm_first_token_timeout
 VECTOR_BACKEND = _settings.vector_backend
 DEVICE = _settings.device
 HOST = _settings.host

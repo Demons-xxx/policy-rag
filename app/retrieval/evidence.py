@@ -41,23 +41,38 @@ def numeric_tokens(*texts: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def adjacent_table_rows(unit: dict, doc_units: dict[str, list[dict]]) -> list[dict]:
-    """条款以冒号/「如下」结尾时，返回紧跟其后的连续表格行。"""
+    """返回条款后紧跟的连续表格行。
+
+    - 条款以冒号/「如下」结尾：表题可省略；
+    - 否则允许跨过至多 2 个短标题/表题行（如「科研经费报销标准表」，≤30 字且不以句号结尾），
+      再接表格。这样「条款 + 标准表」的写法也能把表格作为该条款的证据，
+      不会因为表题单独成了一个段落而丢失数值行。
+    """
     if str(unit.get('kind') or '') != 'article':
         return []
     text = str(unit.get('text') or '').rstrip()
-    if not (text.endswith('：') or text.endswith(':') or '如下' in text[-30:]):
-        return []
+    explicit = bool(text.endswith('：') or text.endswith(':') or '如下' in text[-30:])
     doc_id = str(unit.get('doc_id') or '')
     order = int(unit.get('order') or 0)
     rows: list[dict] = []
+    skipped = 0
     for other in doc_units.get(doc_id, []):
         if int(other.get('order') or 0) <= order:
             continue
-        if str(other.get('kind') or '') != 'table_row':
+        kind = str(other.get('kind') or '')
+        if kind == 'table_row':
+            rows.append(other)
+            if len(rows) >= 12:
+                break
+            continue
+        if rows:
             break
-        rows.append(other)
-        if len(rows) >= 12:
-            break
+        caption = str(other.get('text') or '').strip()
+        if (not explicit and skipped < 2 and kind in ('paragraph', 'heading')
+                and 0 < len(caption) <= 30 and not caption.endswith('。')):
+            skipped += 1
+            continue
+        break
     return rows
 
 
