@@ -1,6 +1,6 @@
 {
   "name": "PolicyRAG",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "schema": 1,
   "description": "政策、制度与办事流程 RAG 智能问答"
 }

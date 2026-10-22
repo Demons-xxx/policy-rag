@@ -203,6 +203,47 @@ def api_document_pdf(doc_id: str) -> FileResponse:
     )
 
 
+@router.get('/documents/{doc_id}/units')
+def api_document_units(doc_id: str) -> dict:
+    """文档的单元清单（工作台原文/对比共用），只保留前端需要的字段。"""
+    record = _document(doc_id)
+    public = _public(record)
+    path = Path(config.DOCS_DIR) / doc_id / 'units.jsonl'
+    units: list[dict] = []
+    if path.is_file():
+        try:
+            for line in path.read_text(encoding='utf-8').splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(item, dict) or not item.get('text'):
+                    continue
+                units.append({
+                    'id': item.get('id'),
+                    'kind': item.get('kind') or 'paragraph',
+                    'chapter': item.get('chapter') or '',
+                    'section': item.get('section') or '',
+                    'article': item.get('article') or item.get('article_no') or '',
+                    'pages': item.get('pages') or [],
+                    'text': item.get('text') or '',
+                })
+        except OSError as exc:
+            log.warning('读取单元失败 %s: %s', path, exc)
+            raise HTTPException(status_code=503, detail='文档单元暂时无法读取') from exc
+    return {
+        'doc_id': doc_id,
+        'title': public.get('title') or '',
+        'doc_no': public.get('doc_no') or '',
+        'version_label': public.get('version_label') or '',
+        'status': public.get('status') or '',
+        'units': units,
+    }
+
+
 @router.get('/documents/{doc_id}/pages/{page}/image')
 def api_document_page_image(doc_id: str, page: str) -> Response:
     try:

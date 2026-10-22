@@ -476,6 +476,39 @@ def test_api_documents_structure(client, monkeypatch, tmp_path):
     assert document['status'] == 'active'
 
 
+def test_api_document_units_structure(client, monkeypatch, tmp_path):
+    doc_dir = tmp_path / 'docs' / 'doc-abc123def456'
+    doc_dir.mkdir(parents=True)
+    (doc_dir / 'meta.json').write_text(json.dumps({'has_pdf': True, 'pages': 2}, ensure_ascii=False),
+                                       encoding='utf-8')
+    lines = [
+        json.dumps({'id': 'u1', 'kind': 'article', 'chapter': '第一章', 'section': None,
+                    'article': '第一条', 'pages': [1], 'text': '第一条 总则'}, ensure_ascii=False),
+        json.dumps({'id': 'u2', 'kind': 'paragraph', 'article': None, 'pages': [2],
+                    'text': '第二段正文'}, ensure_ascii=False),
+        json.dumps({'id': 'u3', 'text': ''}, ensure_ascii=False),
+        'not-json',
+    ]
+    (doc_dir / 'units.jsonl').write_text(chr(10).join(lines), encoding='utf-8')
+    monkeypatch.setattr(config, 'DOCS_DIR', tmp_path / 'docs')
+    monkeypatch.setattr(documents, '_catalog', lambda: FakeCatalog([DOCUMENT_RECORD]))
+
+    response = client.get('/api/documents/doc-abc123def456/units')
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['doc_id'] == 'doc-abc123def456'
+    assert payload['title'] == '实验室安全管理办法'
+    assert len(payload['units']) == 2
+    assert payload['units'][0]['article'] == '第一条'
+    assert payload['units'][0]['chapter'] == '第一章'
+    assert payload['units'][1]['article'] == ''
+    assert payload['units'][1]['kind'] == 'paragraph'
+
+    missing = client.get('/api/documents/doc-not-exist/units')
+    assert missing.status_code == 404
+    assert missing.json()['detail'] == '文档不存在'
+
+
 def test_api_documents_pdf_404_is_chinese(client, monkeypatch):
     record = dict(DOCUMENT_RECORD, format='docx', has_pdf=0,
                   source_path='data/docs/doc-abc123def456/source.docx')
