@@ -297,6 +297,12 @@ def score(q: dict, result: dict) -> dict:
     refused = bool(REFUSAL_RE.search(answer))
     forbidden_hits = [kw for kw in (q.get("forbidden_keywords") or []) if keyword_hit(kw, answer)]
     cited = sorted({int(m) for m in CITE_RE.findall(answer)})
+    source_ids = {int(s["id"]) for s in sources
+                  if isinstance(s.get("id"), (int, str)) and str(s.get("id", "")).isdigit()}
+    valid_citations = [n for n in cited if n in source_ids] if source_ids else [
+        n for n in cited if 1 <= n <= len(sources)]
+    invalid_citations = [n for n in cited if n not in valid_citations]
+    evidence_ok = True if qtype == "refuse" else bool(doc_ok and article_ok)
 
     if qtype == "refuse":
         passed = refused and not cited
@@ -305,6 +311,8 @@ def score(q: dict, result: dict) -> dict:
     notes = []
     if qtype == "refuse" and cited:
         notes.append("拒答但给出了引用")
+    if invalid_citations:
+        notes.append("引用越界/悬空：" + "、".join(f"[证据{n}]" for n in invalid_citations))
     if forbidden_hits:
         notes.append("提及旧值/" + "、".join(forbidden_hits))
     if not answer:
@@ -317,8 +325,13 @@ def score(q: dict, result: dict) -> dict:
         "doc_matched": doc_matched,
         "article_ok": article_ok,
         "refused": refused,
+        "refused_with_citations": bool(refused and cited),
         "forbidden_hits": forbidden_hits,
         "citations": cited,
+        "valid_citations": valid_citations,
+        "invalid_citations": invalid_citations,
+        "citation_ok": not invalid_citations,
+        "evidence_ok": evidence_ok,
         "passed": passed,
         "note": "；".join(notes),
     }
@@ -340,7 +353,8 @@ def pad(text: str, target: int) -> str:
 
 def print_table(results: list[dict]) -> None:
     header = (pad("ID", 5) + pad("TYPE", 13) + pad("RESULT", 8) + pad("KW", 8)
-              + pad("DOC", 6) + pad("ART", 6) + pad("REFUSE", 8) + pad("SEC", 7) + "NOTE")
+              + pad("DOC", 6) + pad("ART", 6) + pad("EVID", 6) + pad("REFUSE", 8)
+              + pad("CITE", 9) + pad("SEC", 7) + "NOTE")
     print(header)
     print("-" * (width(header) + 12))
     for r in results:
@@ -349,10 +363,13 @@ def print_table(results: list[dict]) -> None:
         doc = "-" if r["type"] == "refuse" else ("ok" if m["doc_ok"] else "MISS")
         art = "-" if not r.get("expected_article") else ("ok" if m["article_ok"] else "MISS")
         ref = "ok" if m["refused"] else "-" if r["type"] != "refuse" else "MISS"
+        evid = "-" if r["type"] == "refuse" else ("ok" if m["evidence_ok"] else "MISS")
+        cite = (f"{len(m['valid_citations'])}/{len(m['citations'])}"
+                if m["citations"] else "-")
         row = (pad(r["id"], 5) + pad(r["type"], 13)
                + pad("PASS" if m["passed"] else "FAIL", 8)
-               + pad(kw, 8) + pad(doc, 6) + pad(art, 6) + pad(ref, 8)
-               + pad(f"{r['seconds']:.1f}", 7)
+               + pad(kw, 8) + pad(doc, 6) + pad(art, 6) + pad(evid, 6) + pad(ref, 8)
+               + pad(cite, 9) + pad(f"{r['seconds']:.1f}", 7)
                + (m["note"] or r.get("error") or ""))
         print(row)
 
@@ -389,6 +406,13 @@ def summarize(results: list[dict], elapsed: float) -> dict:
         "article_checked": len(with_article),
         "refusal_accuracy": rate(sum(1 for r in refuse if r["metrics"]["refused"]), len(refuse)),
         "refusal_checked": len(refuse),
+        "evidence_recall_rate": rate(sum(1 for r in normal if r["metrics"]["evidence_ok"]), len(normal)),
+        "evidence_checked": len(normal),
+        "citations_total": sum(len(r["metrics"]["citations"]) for r in results),
+        "citations_valid": sum(len(r["metrics"]["valid_citations"]) for r in results),
+        "citation_accuracy": rate(sum(len(r["metrics"]["valid_citations"]) for r in results),
+                                  sum(len(r["metrics"]["citations"]) for r in results)),
+        "refusal_conflicts": sum(1 for r in results if r["metrics"]["refused_with_citations"]),
         "legacy_value_mentions": sum(1 for r in results if r["metrics"]["forbidden_hits"]),
         "errors": sum(1 for r in results if r.get("error")),
         "avg_seconds": round(statistics.mean(secs), 3) if secs else None,
@@ -517,7 +541,9 @@ def main(argv: list[str] | None = None) -> int:
     refusal_text = f"{summary['refusal_accuracy']:.1%}" if summary["refusal_checked"] else "—"
     print(f"通过 {summary['passed']}/{summary['total']}（{summary['pass_rate']:.1%}）  "
           f"关键词 {summary['keyword_rate']:.1%}  文档引用 {summary['doc_cite_rate']:.1%}  "
-          f"条款引用 {article_text}  拒答正确 {refusal_text}")
+          f"条款引用 {article_text}  证据召回 {summary['evidence_recall_rate']:.1%}  "
+          f"引用准确 {summary['citation_accuracy']:.1%}（{summary['citations_valid']}/{summary['citations_total']}）  "
+          f"拒答正确 {refusal_text}  拒答冲突 {summary['refusal_conflicts']}")
     print(f"耗时：平均 {summary['avg_seconds']}s  P50 {summary['p50_seconds']}s  "
           f"P95 {summary['p95_seconds']}s  总 {elapsed:.1f}s")
     for qtype, row in summary["by_type"].items():
