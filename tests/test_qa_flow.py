@@ -375,3 +375,31 @@ def test_error_events_and_answer_truncation():
     assert [event['text'] for event in events if event['stage'] == 'answer'] == ['1234']
     assert events[-1]['stage'] == 'done'
     assert events[-1]['output_truncated'] is True
+
+
+def test_refusal_citation_conflict_is_sanitized():
+    """拒答句 + 引用并存时：删除引用，通过 revision 事件下发修正稿。"""
+    pieces = ['未在现行有效制度中找到依据，建议咨询相关归口部门 [证据1][证据9]。']
+    events = collect(make_flow(FakeLLM(pieces=pieces), FakeRetriever()), '危化品怎么领用？', [])
+
+    revision = first(events, 'revision')
+    assert '[证据' not in revision['text']
+    assert '未在现行' in revision['text']
+    assert revision['removed_invalid'] == [9]
+    assert revision['removed_for_refusal'] == 1
+
+    done = events[-1]
+    assert done['stage'] == 'done'
+    assert done['sanitized']['removed_invalid'] == [9]
+
+
+def test_grounded_answer_after_refusal_drops_refusal_sentence():
+    """拒答句后跟着成段有依据内容：删掉拒答句，保留有依据的正文。"""
+    pieces = ['未在现行有效制度中找到依据，建议咨询相关归口部门。',
+              '现有证据列出了住宿费标准：一类地区650元/人·天[证据1]，',
+              '二类地区550元/人·天[证据1]，但未说明北京属于哪一类地区。']
+    events = collect(make_flow(FakeLLM(pieces=pieces), FakeRetriever()), '出差住宿费？', [])
+
+    revision = first(events, 'revision')
+    assert '未在现行' not in revision['text']
+    assert '650元' in revision['text']

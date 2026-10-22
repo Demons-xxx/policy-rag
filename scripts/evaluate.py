@@ -205,6 +205,9 @@ def ask(base_url: str, question: str, history: list[dict], timeout: float,
                 stage = event.get("stage")
                 if stage == "answer":
                     answer_parts.append(str(event.get("text") or ""))
+                elif stage == "revision":
+                    # 后置校验下发的修正稿：整体替换已流式累积的回答
+                    answer_parts = [str(event.get("text") or "")]
                 elif stage == "sources":
                     items = event.get("items")
                     if isinstance(items, list):

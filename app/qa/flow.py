@@ -25,6 +25,7 @@ from typing import Any, Callable, Generator, Iterator
 from app import config
 from app.llm import prompts
 from app.llm.routing import route, rewrite
+from app.qa.validate import sanitize_answer
 
 # 单次回答的字符上限，超过即截断并在 done 事件里标记 output_truncated。
 MAX_ANSWER_CHARS = 8000
@@ -79,10 +80,11 @@ class RouteDecision:
 
 @dataclass
 class AnswerStats:
-    """本次生成的字符数与是否被截断。"""
+    """本次生成的字符数、是否被截断、后置校验改了哪些内容。"""
 
     chars: int = 0
     truncated: bool = False
+    sanitized: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -185,10 +187,14 @@ def source_items(result: dict) -> list[dict]:
     return items
 
 
-def done_payload(started: float, truncated: bool) -> dict:
-    """done 事件字段：耗时与是否截断。"""
-    return {'seconds': round(time.monotonic() - started, 2),
-            'output_truncated': bool(truncated)}
+def done_payload(started: float, truncated: bool,
+                 sanitized: dict | None = None) -> dict:
+    """done 事件字段：耗时、是否截断、后置校验修正说明。"""
+    payload = {'seconds': round(time.monotonic() - started, 2),
+               'output_truncated': bool(truncated)}
+    if sanitized:
+        payload['sanitized'] = sanitized
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -313,9 +319,15 @@ class GenerateStep:
     def __init__(self, max_chars: int | None = None) -> None:
         self.max_chars = MAX_ANSWER_CHARS if max_chars is None else int(max_chars)
 
-    def run(self, llm: Any, messages: list[dict]) -> Generator[AnswerEvent, None, AnswerStats | None]:
-        """产出 answer 事件；失败或无内容时产出 error 事件并返回 None。"""
+    def run(self, llm: Any, messages: list[dict],
+            evidence_count: int | None = None) -> Generator[AnswerEvent, None, AnswerStats | None]:
+        """产出 answer 事件；带证据的路径在流结束后做一次后置校验。
+
+        ``evidence_count`` 为本次证据条数：传入时删除越界引用、修正
+        「拒答 + 引用」矛盾，并用 ``revision`` 事件下发完整修正稿。
+        """
         stats = AnswerStats()
+        parts: list[str] = []
         try:
             for delta in llm.stream(messages, max_tokens=STREAM_MAX_TOKENS,
                                     temperature=STREAM_TEMPERATURE):
@@ -328,6 +340,7 @@ class GenerateStep:
                 text = delta if len(delta) <= remaining else delta[:remaining]
                 stats.chars += len(text)
                 stats.truncated = stats.chars >= self.max_chars
+                parts.append(text)
                 yield AnswerEvent('answer', {'text': text})
                 if stats.truncated:
                     break
@@ -337,6 +350,13 @@ class GenerateStep:
         if stats.chars == 0 and not stats.truncated:
             yield AnswerEvent('error', {'message': EMPTY_ANSWER_MESSAGE})
             return None
+        if evidence_count is not None:
+            full = ''.join(parts)
+            fixed, changes = sanitize_answer(full, evidence_count)
+            if changes and fixed != full:
+                stats.sanitized = changes
+                stats.chars = len(fixed)
+                yield AnswerEvent('revision', {'text': fixed, **changes})
         return stats
 
 
@@ -487,8 +507,9 @@ class AnswerFlow:
         yield AnswerEvent('prompt', {'messages': messages})
         yield AnswerEvent('generating')
 
-        stats = yield from self.generate_step.run(llm, messages)
+        sources = source_items(result)
+        stats = yield from self.generate_step.run(llm, messages, len(sources))
         if stats is None:
             return
-        yield AnswerEvent('sources', {'items': source_items(result)})
-        yield AnswerEvent('done', done_payload(started, stats.truncated))
+        yield AnswerEvent('sources', {'items': sources})
+        yield AnswerEvent('done', done_payload(started, stats.truncated, stats.sanitized))

@@ -88,6 +88,7 @@ async function ask(questionOverride?:string){
   else if(e.stage==='waiting')turn.status=e.message
   else if(e.stage==='routing')turn.status='正在理解问题'
   else if(e.stage==='generating')turn.status='正在生成回答'
+  else if(e.stage==='revision'){flush();turn.answer=e.text}
   else if(e.stage==='sources')turn.sources=(e.items||[]).map(normalizeSource)
   else if(e.stage==='done'){completed=true;turn.seconds=e.seconds;if(e.output_truncated)turn.error='本次回答达到长度上限';}
   else if(e.stage==='error')turn.error=e.message
