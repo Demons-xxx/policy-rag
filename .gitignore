@@ -3,6 +3,7 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
+!/start.py
 !/AGENTS.md
 !/requirements.txt
 !/.env.example
