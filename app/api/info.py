@@ -98,6 +98,7 @@ def api_info() -> dict:
         'doc_count': payload.get('doc_count', 0),
         'unit_count': payload.get('unit_count', 0),
         'vector_backend': payload.get('vector_backend', config.VECTOR_BACKEND),
+        'cache': payload.get('cache'),
         'embedding_model': payload.get('embedding_model', config.EMBEDDING_DIR.name),
         'llm_model': payload.get('llm_model', config.LLM_MODEL),
         'device': payload.get('device', config.resolve_device()),

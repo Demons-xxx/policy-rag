@@ -20,6 +20,7 @@ from typing import Callable
 
 from app import config
 from app.domain import versions as versioning
+from app.retrieval import cache as cache_module
 from app.retrieval import channels, fusion, planner, ranking
 from app.retrieval import evidence as evidence_builder
 from app.retrieval import filters as stage_filters
@@ -108,8 +109,10 @@ class PolicyRetriever:
         # 允许测试注入假编码器，避免单测加载真实模型
         self._encoder = encoder
         self.backend_note: str | None = None
+        self.cache = cache_module.ResultCache(int(getattr(config, 'CACHE_SIZE', 256) or 256))
 
         self.manifest = self._load_manifest()
+        self.release_id = str((self.manifest or {}).get('release_id') or self.release_dir.name)
         units_path = self.release_dir / 'units.jsonl'
         if not units_path.is_file():
             raise RuntimeError(f'发布目录缺少 units.jsonl：{units_path}')
@@ -206,6 +209,7 @@ class PolicyRetriever:
     def info(self) -> dict:
         embedding = self.manifest.get('embedding') or {}
         return {
+            'cache': self.cache.stats(),
             'release_id': self.manifest.get('release_id') or self.release_dir.name,
             'release_dir': str(self.release_dir),
             'backend': self.backend_name,
@@ -263,6 +267,20 @@ class PolicyRetriever:
             'article': parsed.get('article'),
             'is_followup': parsed.get('is_followup'),
         })
+
+        # ---- 结果缓存：同问、同过滤、同 release、同基准日直接复用（T9） ----
+        # 改写问句不进缓存键：同一问题在不同轮次被改写成不同措辞时，按同一问题复用证据。
+        cache_filters = {name: value for name, value in (filters or {}).items() if name != 'rewritten'}
+        cache_key = cache_module.make_key(self.release_id, question, cache_filters, as_of, top_k)
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            cached['seconds'] = round(time.perf_counter() - started, 3)
+            cached['cached'] = True
+            self._emit(on_stage, 'evidence', {
+                'titles': [evidence_builder.unit_label(item['unit']) for item in cached.get('results', [])],
+                'notes': list(cached.get('notes') or []),
+            })
+            return cached
 
         # ---- 通道 1~6：每个子句跑一遍向量 / BM25 / 条款号 / 文号 / 章节 / 标题 ----
         dense_groups: list[list[tuple[str, float]]] = []
@@ -472,7 +490,7 @@ class PolicyRetriever:
             'notes': notes,
         })
 
-        return {
+        payload = {
             'question': question,
             'rewritten': rewritten,
             'filters': {'department': department_filter, 'as_of': as_of},
@@ -480,8 +498,9 @@ class PolicyRetriever:
             'context': context,
             'tokens': used_tokens,
             'notes': notes,
-            'seconds': seconds,
         }
+        self.cache.put(cache_key, payload)
+        return {**payload, 'seconds': seconds, 'cached': False}
 
     # ------------------------------------------------------------------
     # 时效与版本（规则在 app/domain/versions.py，这里只做适配与缓存）

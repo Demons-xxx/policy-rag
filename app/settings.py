@@ -78,6 +78,7 @@ class Settings:
     docling_timeout: int = 600
     docx_preview: bool = True
     docx_preview_timeout: int = 120
+    cache_size: int = 256
     # 服务
     host: str = '127.0.0.1'
     port: int = 7880
@@ -183,6 +184,7 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
         docling_timeout=_as_int(get('POLICYRAG_DOCLING_TIMEOUT', '600'), 600),
         docx_preview=get('POLICYRAG_DOCX_PREVIEW', '1').lower() not in ('0', 'false', 'off', 'no'),
         docx_preview_timeout=_as_int(get('POLICYRAG_DOCX_PREVIEW_TIMEOUT', '120'), 120),
+        cache_size=_as_int(get('RAG_CACHE_SIZE', '256'), 256),
         host=get('POLICYRAG_HOST', '127.0.0.1'),
         port=_as_int(get('POLICYRAG_PORT', '7880'), 7880),
         max_history_chars=_as_int(get('POLICYRAG_MAX_HISTORY_CHARS', '6000'), 6000),

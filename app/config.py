@@ -71,6 +71,7 @@ DOCLING_DEVICE = _settings.docling_device
 DOCLING_TIMEOUT = _settings.docling_timeout
 DOCX_PREVIEW = _settings.docx_preview
 DOCX_PREVIEW_TIMEOUT = _settings.docx_preview_timeout
+CACHE_SIZE = _settings.cache_size
 
 
 def env(name: str, default: str = '') -> str:

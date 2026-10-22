@@ -72,6 +72,9 @@ class Runtime:
             'embedding_model': config.EMBEDDING_DIR.name,
             'llm_model': config.LLM_MODEL,
             'device': retriever.device if retriever else config.resolve_device(),
+            'cache': (retriever.cache.stats()
+                      if retriever is not None and getattr(retriever, 'cache', None) is not None
+                      else None),
             'error': error,
         }
 
