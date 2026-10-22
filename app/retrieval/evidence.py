@@ -15,6 +15,25 @@ EVIDENCE_MAX_TOKENS = 1200
 TABLE_ROOM_FLOOR = 80
 # 「问题确实在问版本/有效性」的判断词
 VERSION_WORDS = ('有效', '现行', '旧版', '新版', '修订', '废止', '版本', '之前', '原来')
+# 问题里的数值/期限：命中时优先展示含该数值的条款与表格行
+NUMERIC_RE = re.compile(
+    r'(?:\d+(?:\.\d+)?|[一二三四五六七八九十百千两]+)\s*'
+    r'(?:个?工作日|个?自然日|日|天|周|个月|月|年|小时|分钟|'
+    r'%|％|元|万元|倍|次|人|份|页|字|米|平方米|公里|千米|公斤|kg|折)'
+)
+
+
+def numeric_tokens(*texts: str) -> list[str]:
+    """从问题与改写问句里提取数值/期限词（去空格、去重，最多 6 个）。"""
+    tokens: list[str] = []
+    for text in texts:
+        for match in NUMERIC_RE.finditer(str(text or '')):
+            token = re.sub(r'\s+', '', match.group(0))
+            if len(token.replace('.', '')) < 2:
+                continue
+            if token not in tokens:
+                tokens.append(token)
+    return tokens[:6]
 
 
 # ---------------------------------------------------------------------------
@@ -42,18 +61,28 @@ def adjacent_table_rows(unit: dict, doc_units: dict[str, list[dict]]) -> list[di
     return rows
 
 
-def table_block(rows: list[dict]) -> str:
+def _row_matches(row: dict, prefer: list[str] | None) -> bool:
+    if not prefer:
+        return False
+    cells = [str(cell).strip() for cell in ((row.get('table') or {}).get('row') or [])]
+    text = re.sub(r'\s+', '', ' | '.join(cell for cell in cells if cell))
+    return any(token in text for token in prefer)
+
+
+def table_block(rows: list[dict], prefer: list[str] | None = None) -> str:
+    """把连续表格行渲染成证据：表名 + 列 + 行；问题含数值时该行排到最前。"""
     if not rows:
         return ''
     table = rows[0].get('table') or {}
     headers = [str(cell).strip() for cell in (table.get('headers') or []) if str(cell).strip()]
     name = str(table.get('name') or '').strip()
+    ordered = sorted(rows, key=lambda row: 0 if _row_matches(row, prefer) else 1)
     lines: list[str] = []
     if name:
         lines.append(f'表格：{name}')
     if headers:
         lines.append('列：' + ' | '.join(headers))
-    for row in rows:
+    for row in ordered:
         cells = [str(cell).strip() for cell in ((row.get('table') or {}).get('row') or [])]
         cells = [cell for cell in cells if cell]
         if not cells or cells == headers:
@@ -134,14 +163,24 @@ def build_evidence(unit_id: str, unit: dict, record: dict,
                    doc_units: dict[str, list[dict]],
                    unit_passages: dict[str, list[dict]],
                    tokenizer=None,
-                   max_tokens: int = EVIDENCE_MAX_TOKENS) -> str:
-    """生成一段证据：抬头 + 原文/表格/命中片段，超长时截断。"""
+                   max_tokens: int = EVIDENCE_MAX_TOKENS,
+                   prefer: list[str] | None = None,
+                   merged_units: list[dict] | None = None) -> str:
+    """生成一段证据：抬头 + 原文/表格/命中片段，超长时截断。
+
+    ``merged_units``：同一 article 的其它单元，正文按原顺序拼在主语段之后；
+    ``prefer`` 是问题里的数值/期限，表格行据此把命中行排到最前。
+    """
     kind = str(unit.get('kind') or '')
     text = str(unit.get('text') or '').strip()
+    extras = [str(other.get('text') or '').strip() for other in (merged_units or [])]
+    extras = [item for item in extras if item and item not in text]
+    if extras:
+        text = '\n'.join([text] + extras)
     if kind == 'table_row':
         text = table_text(unit) or text
     elif kind == 'article':
-        block = table_block(adjacent_table_rows(unit, doc_units))
+        block = table_block(adjacent_table_rows(unit, doc_units), prefer)
         if block:
             room = max_tokens - count_tokens(block, tokenizer)
             if room > TABLE_ROOM_FLOOR:
@@ -251,7 +290,7 @@ def wants_version_hint(question: str, rewritten: str) -> bool:
 
 
 __all__ = [
-    'EVIDENCE_MAX_TOKENS', 'TABLE_ROOM_FLOOR', 'VERSION_WORDS',
+    'EVIDENCE_MAX_TOKENS', 'TABLE_ROOM_FLOOR', 'VERSION_WORDS', 'NUMERIC_RE', 'numeric_tokens',
     'adjacent_table_rows', 'table_block', 'table_text',
     'count_tokens', 'clip_tokens', 'excerpt',
     'build_evidence', 'pages', 'evidence_header', 'citation', 'unit_label',

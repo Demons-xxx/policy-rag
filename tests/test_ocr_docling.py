@@ -101,6 +101,19 @@ def test_ocr_client_rejects_failed_response(monkeypatch, tmp_path):
         server.server_close()
 
 
+def test_ocr_pipe_table_becomes_aligned_rows(tmp_path, monkeypatch, ocr_server):
+    from app.ingest import structure
+
+    pdf = _scanned_pdf(tmp_path / "scan.pdf")
+    monkeypatch.setattr(config, "OCR_ENDPOINT", ocr_server)
+    parsed = parser.parse_document(pdf)
+    units = structure.build_units(parsed, {"doc_id": "doc-test", "title": "测试制度"})
+    rows = [unit for unit in units if unit["kind"] == "table_row"]
+    assert rows, "OCR 返回的 pipe 表格应切成 table_row"
+    assert rows[0]["table"]["headers"] == ["审批人", "时限"]
+    assert rows[-1]["table"]["row"] == ["导师", "3 个工作日"]
+
+
 def test_docling_backend_reports_missing_runtime(monkeypatch, tmp_path):
     from app.ingest import docling
 

@@ -377,6 +377,10 @@ class PolicyRetriever:
         ordered = ranking.order_units(kept, records, stale_ids, heading_flags)
         # 交叉编码器重排：只影响前若干名，模型不可用时原样返回
         ordered = _apply_rerank(rewritten or base, ordered, self.unit_map, records)
+        # 问题含数值/期限时，含该数值的条款/表格行优先；同一 article 的碎片合并成一个证据位
+        prefer_tokens = evidence_builder.numeric_tokens(normalize(question), rewritten)
+        ordered = ranking.prefer_numeric_units(ordered, prefer_tokens, self.unit_map)
+        ordered, merged_article_units = ranking.merge_article_units(ordered, self.unit_map)
 
         # 跨制度问题：前几名全来自同一份文档时，用最后一个名额换入另一份文档
         selection = ranking.diversify_documents(ordered, top_k, self.unit_map, records)
@@ -405,11 +409,14 @@ class PolicyRetriever:
             # 不放进证据，避免回答里出现「奖学金办法」这类无关引用。
             if not stage_filters.passes_result_gate(record, min_dense, gate.max_dense):
                 continue
+            merged_units = merged_article_units.get(unit_id) or []
             evidence = evidence_builder.build_evidence(
                 unit_id, unit, record,
                 doc_units=self._doc_units,
                 unit_passages=self.unit_passages,
                 tokenizer=tokenizer,
+                prefer=prefer_tokens,
+                merged_units=merged_units,
             )
             cost = evidence_builder.count_tokens(evidence, tokenizer)
             if used_tokens + cost > budget:
@@ -427,11 +434,17 @@ class PolicyRetriever:
             }
             if 'rerank' in (record.get('scores') or {}):
                 scores['rerank'] = record['scores']['rerank']
+            citation = evidence_builder.citation(unit)
+            if merged_units:
+                citation['pages'] = sorted(set(citation.get('pages') or [])
+                                           | {page for other in merged_units
+                                              for page in evidence_builder.pages(other)})
             results.append({
                 'rank': len(results) + 1,
                 'unit': dict(unit),
                 'evidence': evidence,
-                'citation': evidence_builder.citation(unit),
+                'citation': citation,
+                'merged_units': [str(other.get('id')) for other in merged_units],
                 'channels': [name for name in fusion.CHANNEL_ORDER if name in record['channels']],
                 'scores': scores,
             })

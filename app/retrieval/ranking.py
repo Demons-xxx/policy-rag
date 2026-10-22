@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 # 同标题旧版本降权但不驱逐：正常提问由现行版胜出，用户明确点名旧文号时旧版
@@ -73,6 +74,60 @@ def diversify_documents(ordered: list[str], top_k: int,
                     selection[-1] = uid
                     break
     return selection
+
+
+def _unit_text(unit: dict) -> str:
+    """单元可比对文本：正文 + 表格单元格 + 章节/条款抬头（去空白）。"""
+    parts = [str(unit.get('text') or '')]
+    table = unit.get('table') or {}
+    parts.extend(str(cell) for cell in (table.get('headers') or []))
+    parts.extend(str(cell) for cell in (table.get('row') or []))
+    for key in ('chapter', 'section', 'article'):
+        parts.append(str(unit.get(key) or ''))
+    return re.sub(r'\s+', '', ' '.join(part for part in parts if part))
+
+
+def prefer_numeric_units(ordered: list[str], tokens: list[str],
+                         unit_map: dict[str, dict], window: int = 20) -> list[str]:
+    """问题含数值/期限时，把命中该数值的单元提到窗口前部（保持原有相对顺序）。"""
+    if not tokens or not ordered:
+        return list(ordered)
+    head = ordered[:max(1, window)]
+    tail = ordered[max(1, window):]
+    hit: list[str] = []
+    rest: list[str] = []
+    for unit_id in head:
+        text = _unit_text(unit_map[unit_id])
+        if any(token in text for token in tokens):
+            hit.append(unit_id)
+        else:
+            rest.append(unit_id)
+    return hit + rest + tail
+
+
+def merge_article_units(ordered: list[str], unit_map: dict[str, dict]) -> tuple[list[str], dict[str, list[dict]]]:
+    """同一 article 的多个单元合并成一个证据位：保留最先出现的，其余作为附加片段。
+
+    返回 ``(去重后的顺序, {代表 unit_id: [附加单元, ...]})``；
+    没有 article（表格行、章节导语等）的单元不参与合并。
+    """
+    kept: list[str] = []
+    seen: dict[tuple, str] = {}
+    merged: dict[str, list[dict]] = {}
+    for unit_id in ordered:
+        unit = unit_map[unit_id]
+        article = str(unit.get('article') or '').strip()
+        if not article:
+            kept.append(unit_id)
+            continue
+        key = (unit.get('doc_id'), unit.get('chapter'), unit.get('section'), article)
+        first = seen.get(key)
+        if first is None:
+            seen[key] = unit_id
+            kept.append(unit_id)
+            continue
+        merged.setdefault(first, []).append(unit)
+    return kept, merged
 
 
 def fill_with_attached_rows(selection: list[str], ordered: list[str], top_k: int,
@@ -155,6 +210,7 @@ def merge_notes(version_notes: list[str], notes: list[str]) -> list[str]:
 __all__ = [
     'STALE_FACTOR', 'HEADING_FACTOR', 'VERSION_NOTE_RATIO', 'DIVERSITY_RATIO',
     'dedupe', 'order_key', 'order_units', 'diversify_documents',
+    'prefer_numeric_units', 'merge_article_units',
     'fill_with_attached_rows', 'enforce_quotas', 'best_selected_score', 'version_note_score_ok',
     'note_over_budget', 'merge_notes',
 ]
