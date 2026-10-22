@@ -9,10 +9,10 @@ import PdfPreview from './PdfPreview.vue'
 type Source={id:number;doc_id:string;file:string;pages:number[];focus_page?:number|null;title?:string;text:string;article?:string|null;chapter?:string|null;doc_no?:string|null;version_label?:string|null}
 type Turn={id:string;question:string;answer:string;sources:Source[];events:any[];error?:string;seconds?:number;busy?:boolean;status?:string}
 type Session={id:string;title:string;turns:Turn[]}
-type PolicyDocument={id:string;name?:string;title?:string;doc_no?:string|null;version_label?:string|null;department?:string|null;status?:string;pages?:number;has_pdf?:boolean|number;effective_from?:string|null;effective_to?:string|null}
+type PolicyDocument={id:string;name?:string;title?:string;doc_no?:string|null;version_label?:string|null;department?:string|null;status?:string;pages?:number;has_pdf?:boolean|number;effective_from?:string|null;effective_to?:string|null;supersedes?:string|null;superseded_by?:string|null}
 type Task={id:string;files?:string[];name?:string;status?:string;phase?:string;error?:string;active?:boolean;units?:number}
 
-const view=ref<'chat'|'library'>('chat'),navOpen=ref(false),librarySearch=ref('')
+const view=ref<'chat'|'library'>('chat'),navOpen=ref(false),librarySearch=ref(''),libraryStatus=ref(''),libraryDepartment=ref(''),selectedDoc=ref<PolicyDocument|null>(null)
 const info=ref<any>(null),documents=ref<PolicyDocument[]>([]),tasks=ref<Task[]>([])
 const sessions=ref<Session[]>([]),sessionId=ref(''),input=ref(''),busy=ref(false),flow=ref(false)
 const panel=ref<'source'|null>(null),selectedSource=ref<Source|null>(null)
@@ -28,7 +28,9 @@ const panes=usePaneWidths(()=>Boolean(panel.value))
 const connectionLabel=computed(()=>connectionLoading.value?'正在连接':connectionError.value?'连接已断开':info.value?.model_ready?'服务已连接':'服务准备中')
 const current=computed(()=>sessions.value.find(s=>s.id===sessionId.value))
 const title=computed(()=>view.value==='library'?'资料库':current.value?.title||'新对话')
-const filteredDocuments=computed(()=>{const text=librarySearch.value.trim().toLowerCase();return documents.value.filter(d=>`${d.title||''} ${d.name||''} ${d.doc_no||''} ${d.version_label||''} ${d.department||''}`.toLowerCase().includes(text))})
+const departments=computed(()=>Array.from(new Set(documents.value.map(d=>d.department).filter(Boolean))).sort() as string[])
+const filteredDocuments=computed(()=>{const text=librarySearch.value.trim().toLowerCase();return documents.value.filter(d=>{if(libraryStatus.value&&(d.status||'active')!==libraryStatus.value)return false;if(libraryDepartment.value&&d.department!==libraryDepartment.value)return false;return `${d.title||''} ${d.name||''} ${d.doc_no||''} ${d.version_label||''} ${d.department||''}`.toLowerCase().includes(text)})})
+const selectedDocTitle=computed(()=>{const id=selectedDoc.value?.id;if(!id)return '';return documents.value.find(d=>d.id===id)?.title||''})
 const examples=computed(()=>{const list=info.value?.examples;return Array.isArray(list)&&list.length?list.slice(0,3):['实验室危化品怎么领用？','科研经费出差住宿费能报多少？','教职工请假由谁审批？']})
 const currentHasPdf=computed(()=>sourceHasPdf(selectedSource.value))
 function newId(){return globalThis.crypto?.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)}
@@ -48,12 +50,14 @@ function answerCite(id:number,turn:Turn){const source=turn.sources.find(s=>s.id=
 function sourceHasPdf(source:Source|null|undefined){if(!source)return false;const doc=documentFor(source.doc_id);if(doc)return doc.has_pdf===true||doc.has_pdf===1;return /\.pdf$/i.test(source.file||'')}
 function documentFor(docId?:string|null){return documents.value.find(d=>d.id===docId)}
 function openSource(source:Source){
+ selectedDoc.value=null
  selectedSource.value=source
  pdfPage.value=source.focus_page&&source.pages?.includes(source.focus_page)?source.focus_page:source.pages?.[0]||1
  selectedPdf.value=`/api/documents/${encodeURIComponent(source.doc_id)}/pdf#page=${pdfPage.value}`
  sourceMode.value='text';panel.value='source'
 }
 function openDocument(d:PolicyDocument){
+ selectedDoc.value=d
  selectedSource.value={id:0,doc_id:d.id,file:d.name||d.title||'制度文档',pages:[1],title:d.title||d.name||'',text:''}
  selectedPdf.value=`/api/documents/${encodeURIComponent(d.id)}/pdf#page=1`
  sourceMode.value=Boolean(d.has_pdf)?'pdf':'text';panel.value='source'
@@ -106,6 +110,46 @@ async function ask(questionOverride?:string){
  finally{if(flushTimer)clearTimeout(flushTimer);flush();busy.value=false;turn.busy=false;controller=null;persist()}
 }
 async function copy(turn:Turn){try{await navigator.clipboard.writeText(turn.answer);notice('已复制')}catch{notice('请选中回答后复制')}}
+async function regenerate(turn:Turn){
+ if(busy.value||!current.value)return
+ const session=current.value,len=turnsIndex(session,turn)
+ if(len<0)return
+ session.turns.splice(len)  // 去掉该轮及其后内容，用剩余历史重新生成
+ view.value='chat';panel.value=null;await ask(turn.question)
+}
+function turnsIndex(session:Session,turn:Turn){return session.turns.findIndex(t=>t.id===turn.id)}
+function selectedDocTitleOf(id?:string|null){if(!id)return '';return documents.value.find(d=>d.id===id)?.title||id}
+function exportTurn(turn:Turn){
+ const lines=[`# ${turn.question}`,'',turn.answer||'（回答为空）','','## 参考来源']
+ turn.sources.forEach(s=>{const page=(s.pages||[1]).join('、');lines.push(`- [${s.id}] ${s.file}${s.article?' · '+s.article:''}（第${page}页）`)})
+ if(!turn.sources.length)lines.push('- （无）')
+ const blob=new Blob([lines.join('\n')],{type:'text/markdown;charset=utf-8'})
+ const url=URL.createObjectURL(blob),a=document.createElement('a')
+ a.href=url;a.download=`回答-${turn.question.slice(0,20).replace(/[\/:*?"<>|]/g,'_')||'导出'}.md`
+ document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)
+ notice('已导出 Markdown')
+}
+function renameSession(session:Session){
+ if(busy.value)return
+ const next=window.prompt('修改对话名称（1–40 字）',session.title)
+ if(next===null)return
+ const title=next.trim().slice(0,40)
+ if(!title){notice('名称不能为空');return}
+ session.title=title;persist();notice('已重命名')
+}
+async function setDocStatus(doc:PolicyDocument|null,status:'repealed'|'active'){
+ if(!doc||busy.value)return
+ const target=doc.title||doc.name||doc.id
+ if(status==='repealed'&&!window.confirm(`停用《${target}》？
+停用后不再参与问答，可在同一位置恢复。`))return
+ try{
+  if(status==='repealed')await api(`/api/documents/${encodeURIComponent(doc.id)}?publish=false`,{method:'DELETE'})
+  else await api(`/api/documents/${encodeURIComponent(doc.id)}/restore?publish=false`,{method:'POST'})
+  notice(status==='repealed'?'已停用该文档':'已恢复该文档')
+  await loadLibrary()
+  selectedDoc.value=documents.value.find(item=>item.id===doc.id)||{...doc,status}
+ }catch(e:any){notice(e.message)}
+}
 async function loadLibrary(){
  if(disposed)return;if(libraryRequest)return libraryRequest
  libraryRequest=(async()=>{libraryLoading.value=true;libraryError.value='';try{const [d,t]=await Promise.allSettled([api('/api/documents'),api('/api/ingest')]);if(disposed)return;if(d.status==='fulfilled')documents.value=d.value.documents||[];else libraryError.value=d.reason.message;if(t.status==='fulfilled')tasks.value=t.value.tasks||[];else libraryError.value=libraryError.value||t.reason.message}catch(e:any){libraryError.value=e.message}finally{libraryLoading.value=false;libraryRequest=null}})()
@@ -152,7 +196,7 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
    <div class="pane-resizer sidebar-resizer" role="separator" tabindex="0" aria-label="调整导航宽度" aria-orientation="vertical" :aria-valuenow="panes.sidebarWidth.value" aria-valuemin="180" :aria-valuemax="panes.sidebarMax.value" title="拖动调整宽度，双击恢复" @pointerdown="panes.start($event,'sidebar')" @keydown="panes.key($event,'sidebar')" @dblclick="panes.reset('sidebar')"></div>
    <div class="brand" aria-label="PolicyRAG 政策制度问答"><span class="brand-mark"><span></span><span></span><span></span><span></span></span><div class="brand-text"><strong>PolicyRAG</strong><span>政策制度问答</span></div></div>
    <nav><button class="nav-button" :disabled="busy" @click="newChat"><Icon name="plus"/>新对话</button><button class="nav-button" :class="{active:view==='chat'}" @click="view='chat';navOpen=false"><Icon name="chat"/>问答</button><button class="nav-button" :class="{active:view==='library'}" @click="view='library';panel=null;navOpen=false;loadLibrary()"><Icon name="file"/>资料库</button></nav>
-   <div class="session-heading">最近对话</div><div class="session-list"><div v-for="s in sessions.filter(s=>s.turns.length)" :key="s.id" class="session-row" :class="{selected:s.id===sessionId&&view==='chat'}"><button class="session-open" :disabled="busy" :title="s.title" @click="selectSession(s)">{{s.title}}</button><button class="session-delete" :disabled="busy" :aria-label="`删除对话：${s.title}`" :title="busy?'请先停止回答再删除':'删除对话'" @click="deleteSession(s)"><Icon name="trash"/></button></div></div>
+   <div class="session-heading">最近对话</div><div class="session-list"><div v-for="s in sessions.filter(s=>s.turns.length)" :key="s.id" class="session-row" :class="{selected:s.id===sessionId&&view==='chat'}"><button class="session-open" :disabled="busy" :title="s.title" @click="selectSession(s)">{{s.title}}</button><button class="session-rename" :disabled="busy" :aria-label="`重命名对话：${s.title}`" :title="busy?'请先停止回答再重命名':'重命名对话'" @click="renameSession(s)"><Icon name="edit"/></button><button class="session-delete" :disabled="busy" :aria-label="`删除对话：${s.title}`" :title="busy?'请先停止回答再删除':'删除对话'" @click="deleteSession(s)"><Icon name="trash"/></button></div></div>
    <div class="sidebar-bottom"><span class="status-dot" :class="{offline:connectionError||!info?.model_ready}"></span>{{connectionLabel}}<button v-if="connectionError||!info?.model_ready" class="icon-button" aria-label="重试连接" :disabled="connectionLoading" @click="refreshConnection"><Icon name="refresh"/></button></div>
   </aside>
   <main class="main-pane">
@@ -166,13 +210,13 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
       <MarkdownText v-if="turn.answer" :text="turn.answer" :sources="turn.sources" @cite="answerCite($event,turn)"/><div v-else-if="turn.busy" class="answer-loading"><span class="loading-dot"></span>{{turn.status||'正在查找制度'}}</div>
       <div v-if="turn.error" class="inline-error" role="status"><span>{{turn.error}}</span><button v-if="!turn.busy" class="quiet-button" :disabled="busy" @click="ask(turn.question)">重新提问</button></div>
       <div v-if="turn.sources.length" class="sources"><div class="sources-label">参考来源</div><button v-for="(s,i) in turn.sources" :key="i" :title="s.file" @click="openSource(s)"><span class="source-number">{{s.id}}</span><span class="source-name">{{s.file}}</span><span class="source-page">{{s.article?s.article+' · ':''}}第{{(s.pages||[1]).join('、')}}页</span><Icon name="chevron"/></button></div>
-      <div v-if="!turn.busy" class="answer-actions"><button class="icon-button" aria-label="复制回答" @click="copy(turn)"><Icon name="copy"/></button><span v-if="turn.seconds">{{turn.seconds.toFixed(1)}}秒</span></div>
+      <div v-if="!turn.busy" class="answer-actions"><button class="icon-button" aria-label="重新生成" title="用同一上下文重新生成" :disabled="busy" @click="regenerate(turn)"><Icon name="refresh"/></button><button class="icon-button" aria-label="导出 Markdown" title="导出问题/回答/来源" @click="exportTurn(turn)"><Icon name="download"/></button><button class="icon-button" aria-label="复制回答" @click="copy(turn)"><Icon name="copy"/></button><span v-if="turn.seconds">{{turn.seconds.toFixed(1)}}秒</span></div>
      </div></section></div>
     </div>
     <button v-if="!atBottom&&current?.turns.length" class="jump-latest quiet-button" @click="jumpToLatest">回到最新回答 ↓</button>
     <form class="composer-area" @submit.prevent="ask()"><div class="composer"><textarea ref="composer" v-model="input" rows="2" placeholder="输入你的问题，例如：实验室危化品怎么领用？" aria-label="问题" @keydown="keydown"></textarea><div class="composer-toolbar"><span class="composer-hint">仅依据现行制度回答</span><button v-if="busy" type="button" class="send-button" aria-label="停止回答" @click="controller?.abort()"><Icon name="stop"/></button><button v-else type="submit" class="send-button" aria-label="发送问题" :disabled="!input.trim()||!info?.model_ready||Boolean(connectionError)"><Icon name="send"/></button></div></div></form>
    </template>
-   <div v-else class="library-content"><div class="library-toolbar"><h1>资料库</h1><button class="icon-button" aria-label="刷新资料库" :disabled="libraryLoading" @click="loadLibrary"><Icon name="refresh"/></button><label class="search-box"><Icon name="search"/><input v-model="librarySearch" placeholder="查找制度、文号或部门" aria-label="查找制度"></label></div>
+   <div v-else class="library-content"><div class="library-toolbar"><h1>资料库</h1><button class="icon-button" aria-label="刷新资料库" :disabled="libraryLoading" @click="loadLibrary"><Icon name="refresh"/></button><label class="search-box"><Icon name="search"/><input v-model="librarySearch" placeholder="查找制度、文号或部门" aria-label="查找制度"></label><select v-model="libraryStatus" class="filter-select" aria-label="按状态筛选"><option value="">全部状态</option><option value="active">现行</option><option value="superseded">已被替代</option><option value="repealed">已废止</option></select><select v-model="libraryDepartment" class="filter-select" aria-label="按部门筛选"><option value="">全部部门</option><option v-for="dep in departments" :key="dep" :value="dep">{{dep}}</option></select></div>
     <div v-if="libraryError" class="inline-error" role="status">{{libraryError}}<button class="quiet-button" :disabled="libraryLoading" @click="loadLibrary">重试</button></div>
     <section v-if="tasks.length" class="task-section"><h2>上传记录 <span>{{tasks.length}}</span></h2><div v-for="t in tasks" :key="t.id" class="task-row"><Icon :name="t.status==='done'?'check':'file'"/><div class="task-name">{{taskLabel(t)}}<small v-if="t.phase" class="task-sub">{{t.phase}}</small></div><span class="badge" :class="taskBadgeClass(t)">{{taskStatus(t)}}</span><button v-if="t.status==='failed'&&!t.active" class="quiet-button" :disabled="retryBusy===t.id" @click="retry(t)">{{retryBusy===t.id?'提交中':'重试'}}</button></div><p v-for="t in tasks.filter(t=>t.error)" :key="'e'+t.id" class="inline-error">{{t.error}}</p></section>
     <section class="document-section"><h2>已有制度 <span>{{filteredDocuments.length}}</span></h2><div class="document-table"><div class="document-row table-head"><span>文件</span><span>归口部门</span><span>状态</span></div><button v-for="d in filteredDocuments" :key="d.id" class="document-row" :title="d.title||d.name" @click="openDocument(d)"><span class="document-name"><Icon name="file"/><span class="doc-text"><span class="document-title">{{d.title||d.name||d.id}}</span><span v-if="d.doc_no||d.version_label" class="doc-meta">{{[d.doc_no,d.version_label].filter(Boolean).join(' · ')}}</span></span></span><span class="document-model">{{d.department||'—'}}</span><span class="badge" :class="{success:d.status==='active',processing:d.status==='superseded'}">{{statusLabel(d.status)}}</span></button><div v-if="!filteredDocuments.length" class="empty-list">{{libraryLoading?'正在加载制度':libraryError?'制度暂时无法加载':'没有找到制度'}}</div></div></section>
@@ -180,7 +224,7 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
   </main>
   <button v-if="panel" class="pane-backdrop" aria-label="收起资料面板" @click="panel=null"></button>
   <aside v-if="panel" class="detail-pane"><div class="pane-resizer detail-resizer" role="separator" tabindex="0" aria-label="调整资料面板宽度" aria-orientation="vertical" :aria-valuenow="panes.detailWidth.value" aria-valuemin="320" :aria-valuemax="panes.detailMax.value" title="拖动调整宽度，双击恢复" @pointerdown="panes.start($event,'detail')" @keydown="panes.key($event,'detail')" @dblclick="panes.reset('detail')"></div><header><strong>原文资料</strong><button class="icon-button" aria-label="关闭右侧面板" @click="panel=null"><Icon name="close"/></button></header>
-   <template v-if="selectedSource"><div class="source-heading"><h2>{{selectedSource.title||selectedSource.file}}</h2><div class="source-tabs"><button :class="{selected:sourceMode==='text'}" @click="sourceMode='text'">证据</button><button v-if="currentHasPdf" :class="{selected:sourceMode==='pdf'}" @click="sourceMode='pdf'">PDF原文</button><a v-if="currentHasPdf" :href="selectedPdf.split('#')[0]+'#page='+pdfPage" target="_blank" rel="noopener">打开原文</a></div></div><PdfPreview v-if="sourceMode==='pdf'&&currentHasPdf" @page="pdfPage=$event" :url="selectedPdf" :pages="documentFor(selectedSource.doc_id)?.pages||selectedSource.pages?.at(-1)||1"/><div v-else class="source-content"><div class="source-page-label" v-if="selectedSource.text">第{{(selectedSource.pages||[1]).join('、')}}页</div><pre v-if="selectedSource.text">{{selectedSource.text}}</pre><p v-else class="panel-empty">该文档没有 PDF 原文，问答回答的“参考来源”中可查看引用的证据文本。</p></div></template>
+   <template v-if="selectedSource"><div v-if="selectedDoc" class="doc-detail"><div class="doc-detail-row"><span>状态</span><span class="badge" :class="{success:selectedDoc.status==='active',processing:selectedDoc.status==='superseded'}">{{statusLabel(selectedDoc.status)}}</span></div><div class="doc-detail-row"><span>归口部门</span><span>{{selectedDoc.department||'—'}}</span></div><div class="doc-detail-row"><span>生效</span><span>{{selectedDoc.effective_from||'—'}}{{selectedDoc.effective_to?' 至 '+selectedDoc.effective_to:''}}</span></div><div v-if="selectedDoc.doc_no||selectedDoc.version_label" class="doc-detail-row"><span>文号/版本</span><span>{{[selectedDoc.doc_no,selectedDoc.version_label].filter(Boolean).join(' · ')}}</span></div><div v-if="selectedDoc.supersedes||selectedDoc.superseded_by" class="doc-detail-row"><span>版本链</span><span>{{selectedDoc.superseded_by?'已被替代 → '+selectedDocTitleOf(selectedDoc.superseded_by):''}}{{selectedDoc.supersedes?' 本版替代 → '+selectedDocTitleOf(selectedDoc.supersedes):''}}</span></div><div class="doc-detail-actions"><button v-if="selectedDoc.status!=='repealed'" class="quiet-button" :disabled="busy" @click="setDocStatus(selectedDoc,'repealed')">停用该文档</button><button v-else class="quiet-button" :disabled="busy" @click="setDocStatus(selectedDoc,'active')">恢复文档</button></div></div><div class="source-heading"><h2>{{selectedSource.title||selectedSource.file}}</h2><div class="source-tabs"><button :class="{selected:sourceMode==='text'}" @click="sourceMode='text'">证据</button><button v-if="currentHasPdf" :class="{selected:sourceMode==='pdf'}" @click="sourceMode='pdf'">PDF原文</button><a v-if="currentHasPdf" :href="selectedPdf.split('#')[0]+'#page='+pdfPage" target="_blank" rel="noopener">打开原文</a></div></div><PdfPreview v-if="sourceMode==='pdf'&&currentHasPdf" @page="pdfPage=$event" :url="selectedPdf" :pages="documentFor(selectedSource.doc_id)?.pages||selectedSource.pages?.at(-1)||1"/><div v-else class="source-content"><div class="source-page-label" v-if="selectedSource.text">第{{(selectedSource.pages||[1]).join('、')}}页</div><pre v-if="selectedSource.text">{{selectedSource.text}}</pre><p v-else class="panel-empty">该文档没有 PDF 原文，问答回答的“参考来源”中可查看引用的证据文本。</p></div></template>
   </aside>
  </div>
  <div v-if="uploadOpen" class="modal-backdrop" @click.self="!uploading&&(uploadOpen=false)"><section class="modal upload-modal"><header><h2>上传制度资料</h2><button class="icon-button" aria-label="关闭上传" :disabled="uploading" @click="uploadOpen=false"><Icon name="close"/></button></header><div class="drop-zone" @dragover.prevent @drop="drop" @click="!uploading&&fileInput?.click()"><Icon name="upload"/><strong>拖入 PDF、DOCX、MD 或 TXT，或选择文件</strong><input ref="fileInput" type="file" accept=".pdf,.docx,.md,.txt" multiple hidden aria-label="选择制度文件" @change="acceptFiles(($event.target as HTMLInputElement).files)"></div><div v-if="files.length" class="selection-summary">{{files.length}}份文件 · {{(files.reduce((n,f)=>n+f.size,0)/1024/1024).toFixed(1)}}MB</div><div class="selected-files"><div v-for="(f,i) in files" :key="f.name"><Icon name="file"/><span>{{f.name}}</span><button class="icon-button" aria-label="移除文件" :disabled="uploading" @click="files.splice(i,1)"><Icon name="close"/></button></div></div>
@@ -201,4 +245,13 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
 .doc-meta{max-width:100%;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--muted);background:#f1f3ee;border-radius:4px;padding:2px 6px;white-space:nowrap}
 .task-sub{display:block;font-size:12px;color:var(--muted);margin-top:2px}
 .task-section h2 span{font-weight:400;color:var(--muted);margin-left:7px}
+.filter-select{height:32px;border:1px solid var(--line,#d8d9d0);border-radius:8px;background:#fff;color:var(--ink,#222);font-size:13px;padding:0 8px}
+.session-rename{width:26px;height:26px;opacity:0;background:none;border:0;color:var(--muted);cursor:pointer;border-radius:6px;padding:4px}
+.session-row:hover .session-rename,.session-row:focus-within .session-rename{opacity:1}
+.session-rename:hover{background:#ecefe7;color:var(--ink)}
+.doc-detail{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-bottom:1px solid #ecece4;background:#fafbf7}
+.doc-detail-row{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.doc-detail-row>span:first-child{color:var(--muted);flex:0 0 auto}
+.doc-detail-row>span:last-child{text-align:right;word-break:break-all}
+.doc-detail-actions{display:flex;gap:8px;padding-top:4px}
 </style>
