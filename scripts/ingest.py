@@ -115,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--meta", help="登记信息 JSON 文件（可选）")
     parser.add_argument("--no-publish", action="store_true", help="只入库，不发布")
     parser.add_argument("--publish", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--parser", choices=("pymupdf", "docling"), default=None,
+                        help="PDF 解析器（默认跟随 POLICYRAG_PARSER_PDF）")
     args = parser.parse_args(argv)
 
     config.ensure_dirs()
@@ -143,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
             external = str(meta["supersedes"])
             meta["supersedes"] = supersedes_map.get(external, external)
         try:
-            record = ingest_path(path, meta=meta)
+            record = ingest_path(path, meta=meta, parser=args.parser)
             print(describe(record))
             issues = record.get("issues") or []
             for issue in issues:

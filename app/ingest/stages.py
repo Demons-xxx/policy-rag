@@ -87,11 +87,19 @@ def guess_title(parsed: dict, path: Path) -> str:
 
 
 # ------------------------------------------------------------------ 五个阶段
-def parse(path: Path | str) -> dict:
-    """阶段 1：文件 → parsed dict；解析器由 ``registry`` 按扩展名提供。"""
+def parse(path: Path | str, parser: str | None = None) -> dict:
+    """阶段 1：文件 → parsed dict；解析器由 ``registry`` 按扩展名提供。
+
+    ``parser`` 非空时只对 PDF 生效（``pymupdf`` / ``docling``），覆盖全局配置。
+    """
     path = Path(path)
     if not path.is_file():
         raise RuntimeError(f"文件不存在：{path}")
+    if parser:
+        from app.ingest.registry import format_for
+
+        if format_for(path) == "pdf":
+            return parser_module._parse_pdf(path, parser)
     return registry.parser_for(path)(path)
 
 
@@ -212,7 +220,7 @@ def publish(record: dict, units: list[dict], issues: list[dict], parsed: dict,
 def stage_parse(state: dict) -> dict:
     """Pipeline 适配：``state["parsed"] = parse(state["path"])``。"""
     state = dict(state)
-    state["parsed"] = parse(state["path"])
+    state["parsed"] = parse(state["path"], state.get("parser"))
     return state
 
 
@@ -386,7 +394,7 @@ def run_stages(state: dict, stages: Sequence | None = None,
 
 def run_document(path: Path | str, meta: dict | None = None, *,
                  sha256: str | None = None, doc_id: str | None = None,
-                 catalog=None, job_id: str | None = None,
+                 catalog=None, job_id: str | None = None, parser: str | None = None,
                  on_stage: StageHook | None = None,
                  on_progress: ProgressHook | None = None,
                  echo: bool = False) -> dict:
@@ -401,8 +409,11 @@ def run_document(path: Path | str, meta: dict | None = None, *,
         raise RuntimeError(f"文件不存在：{path}")
 
     sha256 = sha256 or sha256_file(path)
+    if parser not in (None, "", "pymupdf", "docling"):
+        raise ValueError(f"不支持的 PDF 解析器：{parser}（可选 pymupdf / docling）")
     state = {
         "path": path,
+        "parser": parser or None,
         "meta": clean_meta(meta),
         "sha256": sha256,
         "fmt": registry.format_for(path),

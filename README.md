@@ -77,7 +77,7 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
 | 元数据 | SQLite | `data/state/catalog.sqlite` | 文档登记、任务、发布记录 |
 | 大模型 | 任意 OpenAI 兼容接口 | `.env` 配置 | 必需；没有它只能检索不能生成 |
 | 扫描件 OCR | **外部 HTTP 服务**（不内置模型） | `POLICYRAG_OCR_ENDPOINT` | 可选；处理扫描件 PDF |
-| PDF 版式解析 | docling（外部解释器子进程） | 外部运行时 + `model/docling` 产物（约 367 MB） | 可选；默认用 pymupdf |
+| PDF 版式解析 | docling（外部解释器子进程） | 外部运行时 + `models/docling/` 产物（已拷贝，约 367 MB） | 可选；本机默认 docling，可单次切回 pymupdf |
 | DOCX 页图 | 本机 Microsoft Word（COM） | 系统安装 | 可选；没有 Word 就跳过 |
 | 服务端 / 前端 | FastAPI + uvicorn / Vue 3 + Vite | `web/dist/` | 前端构建产物不进 Git |
 
@@ -91,7 +91,7 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
 | 重排模型 | `models/bge-reranker-v2-m3` | `POLICYRAG_RERANK=0/1`、`POLICYRAG_RERANK_MODEL_DIR`、`_TOP_N`、`_BATCH` | 模型缺失或加载失败：记一条 warning，回退到融合原排序，问答不受影响 |
 | 生成模型 | `.env` 的 `POLICYRAG_LLM_BASE_URL` | `..._MODEL`、`..._API_KEY`、`..._THINKING`、`RAG_LLM_RETRIES`、`RAG_LLM_FIRST_TOKEN_TIMEOUT` | `/api/info` 的 `model_ready=false`，问答返回「生成模型不可用」；重试策略见第 2.1.6 节 |
 | 扫描件 OCR | `POLICYRAG_OCR_ENDPOINT`（空 = 不做 OCR） | `POLICYRAG_OCR_DPI`、`_MIN_CHARS`、`_TIMEOUT`、`_MAX_PAGES` | 端点为空：扫描页保留原样并给「疑似扫描件」质量提示；端点失败：入库任务失败并给出「第 N 页 OCR 失败：原因」 |
-| docling 解析 | 默认尝试同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe` 与 `../RAG/model/docling` | `POLICYRAG_PARSER_PDF=docling`、`POLICYRAG_DOCLING_PYTHON`、`_ARTIFACTS`、`_DEVICE`、`_TIMEOUT` | 解释器不存在时入库报中文错误，提示设置 `POLICYRAG_DOCLING_PYTHON`；默认 `pymupdf` 不受影响 |
+| docling 解析 | 模型 `models/docling/`；解释器默认同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe` | `POLICYRAG_PARSER_PDF=pymupdf/docling`、`POLICYRAG_DOCLING_PYTHON`、`_ARTIFACTS`、`_DEVICE`、`_TIMEOUT` | 解释器不存在时入库报中文错误，提示设置 `POLICYRAG_DOCLING_PYTHON`；选 pymupdf 时完全不受影响 |
 | Word 页图 | 本机 Word 的 COM 接口 | `POLICYRAG_DOCX_PREVIEW=1/0`、`POLICYRAG_DOCX_PREVIEW_TIMEOUT` | 无 Word / 转换失败：DOCX 文本照常入库，只记一条 `docx_preview` 提示，`has_pdf=0` |
 | 向量库 | `POLICYRAG_VECTOR_BACKEND=chroma` 或 `npz` | — | chroma 不可用时可选 `npz`（零外部依赖，但全量加载进内存） |
 
@@ -122,10 +122,25 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
   ```
 - 不配端点：能入库，扫描页会保留空文本并在问题清单里提示「疑似扫描件」，问答不会引用这些页。
 
-#### 2.1.4 docling 版式解析（可选，外部解释器）
+#### 2.1.4 PDF 解析：pymupdf 还是 docling（可自选）
 
-- 主环境**不安装 docling**（体积大、依赖重）。`scripts/docling_worker.py` 由外部「已装 docling 的 Python」执行，子进程读 PDF、写回统一 pages 结构，表格导出为 pipe 表格后由主项目切成 `table_row`。
-- 默认路径推导：同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe`（Linux 为 `../RAG/script/runtime/parse/bin/python`）与 `../RAG/model/docling`。没有这个同盘项目时，必须显式配置：
+两种解析器，按需选择：
+
+| 解析器 | 特点 | 适合 |
+| --- | --- | --- |
+| `pymupdf`（默认） | 快（毫秒级/页），只取文本层 | 普通制度/文档 PDF，时间敏感 |
+| `docling` | 慢（3 页约 4–9s，首次加载模型更久），带版式与表格还原，表格切 `table_row` | 表格多、版式复杂、扫描/双栏，时间宽裕时质量更好 |
+
+**怎么选（三选一，优先级从高到低）**：
+
+1. **单次入库**：`python scripts/ingest.py 路径 --parser docling|pymupdf`；
+2. **接口上传**：`metadata` 里加 `"parser": "docling"`（对象=全部文件共用，数组=逐文件），`POST /api/ingest` 的任务按它解析；
+3. **全局默认**：`.env` 的 `POLICYRAG_PARSER_PDF=pymupdf|docling`（改完重启服务）。
+
+> 本项目**本机部署已设 `POLICYRAG_PARSER_PDF=docling`**（时间充裕、优先质量）；换机器或追求速度时改成 `pymupdf` 即可。文档解析器记录在 `meta.json` 的 `parser` 字段，事后可追溯。
+
+- 权重位置：`models/docling/`（已随项目拷贝，约 367 MB；`POLICYRAG_DOCLING_ARTIFACTS` 可覆盖）。
+- 运行时：主环境不装 docling，`scripts/docling_worker.py` 由外部「已装 docling 的 Python」执行；默认同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe`（Linux 为 `../RAG/script/runtime/parse/bin/python`）。没有同盘项目时必须显式配置：
   ```ini
   POLICYRAG_PARSER_PDF=docling
   POLICYRAG_DOCLING_PYTHON=D:/path/to/docling-venv/Scripts/python.exe
@@ -133,11 +148,11 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
   POLICYRAG_DOCLING_DEVICE=cuda
   POLICYRAG_DOCLING_TIMEOUT=600
   ```
+- docling 自带的是「可插拔 OCR 引擎」的接入能力（本机环境装有 easyocr），不是单独一个内置模型；本项目为了让 docling 专注版式/表格，在 worker 里 `do_ocr=False`，扫描页仍由 2.1.3 的外部 OCR 端点处理。
 - 手工验证（用带 docling 的解释器跑 worker）：
   ```bash
-  D:/path/to/docling-venv/Scripts/python.exe scripts/docling_worker.py --input 样例.pdf --output out.json --device cuda --artifacts D:/path/to/docling-model
+  D:/path/to/docling-venv/Scripts/python.exe scripts/docling_worker.py --input 样例.pdf --output out.json --device cuda --artifacts models/docling
   ```
-- 取舍：docling 对复杂版式/表格更准（本机 3 页样例约 4.2s），但比 pymupdf 慢；日常制度文件用默认 `pymupdf` 即可，扫描/复杂表格再切 docling。
 
 #### 2.1.5 Word 页图（可选，仅 Windows）
 

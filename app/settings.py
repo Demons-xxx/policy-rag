@@ -134,17 +134,22 @@ def load_settings(root: Path | None = None, env_file: Path | None = None) -> Set
     rerank_dir = Path(get('POLICYRAG_RERANK_MODEL_DIR', '') or rerank_default)
     if not rerank_dir.is_absolute():
         rerank_dir = root / rerank_dir
-    # 同盘 RAG 项目里的 docling 运行时与模型：存在就默认复用，不存在则留空。
+    # docling 模型权重默认放项目内 models/docling（仓库自带拷贝），
+    # 没拷贝时才回退到同盘 RAG 项目的 model/docling；运行时解释器仍然复用 RAG。
     sibling = root.parent / 'RAG'
+    local_docling = models_dir / 'docling'
+    docling_artifacts = Path(
+        get('POLICYRAG_DOCLING_ARTIFACTS', '')
+        or (local_docling if local_docling.is_dir() else (sibling / 'model' / 'docling'))
+    )
+    if not docling_artifacts.is_absolute():
+        docling_artifacts = root / docling_artifacts
     docling_runtime = (sibling / 'local_service' / 'runtime' / 'parse' / 'Scripts' / 'python.exe'
                        if os.name == 'nt'
                        else sibling / 'script' / 'runtime' / 'parse' / 'bin' / 'python')
     docling_python = Path(get('POLICYRAG_DOCLING_PYTHON', '') or docling_runtime)
     if str(docling_python) and not docling_python.is_absolute():
         docling_python = root / docling_python
-    docling_artifacts = Path(get('POLICYRAG_DOCLING_ARTIFACTS', '') or (sibling / 'model' / 'docling'))
-    if not docling_artifacts.is_absolute():
-        docling_artifacts = root / docling_artifacts
 
     return Settings(
         root=root,

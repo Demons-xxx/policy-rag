@@ -70,8 +70,11 @@ def _read_text(path: Path) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _parse_pdf(path: Path) -> dict:
-    if str(getattr(config, "PARSER_PDF", "pymupdf")).lower() == "docling":
+def _parse_pdf(path: Path, parser: str | None = None) -> dict:
+    choice = str(parser or getattr(config, "PARSER_PDF", "pymupdf") or "pymupdf").strip().lower()
+    if choice not in ("pymupdf", "docling"):
+        raise RuntimeError(f"不支持的 PDF 解析器：{choice}（可选 pymupdf / docling）")
+    if choice == "docling":
         from app.ingest import docling as docling_backend
 
         parsed = docling_backend.parse_pdf(path)
@@ -347,13 +350,19 @@ def _parse_html(path: Path) -> dict:
     }
 
 
-def parse_document(path: Path) -> dict:
-    """解析一份文档（按注册表选择解析器），返回契约 3.2 规定的结构。"""
+def parse_document(path: Path, parser: str | None = None) -> dict:
+    """解析一份文档（按注册表选择解析器），返回契约 3.2 规定的结构。
+
+    ``parser`` 只对 PDF 生效（``pymupdf`` / ``docling``），用于单次入库时
+    覆盖全局配置 ``POLICYRAG_PARSER_PDF``。
+    """
     path = Path(path)
     if not path.is_file():
         raise RuntimeError(f"文件不存在：{path}")
-    from app.ingest.registry import parser_for
+    from app.ingest.registry import format_for, parser_for
 
+    if parser and format_for(path) == "pdf":
+        return _parse_pdf(path, parser)
     return parser_for(path)(path)
 
 

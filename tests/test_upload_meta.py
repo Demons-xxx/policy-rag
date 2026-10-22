@@ -71,7 +71,7 @@ def test_run_job_passes_each_files_own_metadata(monkeypatch):
 
     captured: list[tuple[str, dict]] = []
 
-    def fake_ingest(path, meta=None, job_id=None):
+    def fake_ingest(path, meta=None, job_id=None, parser=None):
         captured.append((str(path), dict(meta or {})))
         return {'doc_id': 'doc-' + str(path), 'title': (meta or {}).get('title'),
                 'unit_count': 1, 'deduplicated': False, 'issues': []}

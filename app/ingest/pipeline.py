@@ -103,7 +103,8 @@ def _job_callback(job_id: str | None):
     return notify
 
 
-def ingest_path(path: Path, meta: dict | None = None, job_id: str | None = None) -> dict:
+def ingest_path(path: Path, meta: dict | None = None, job_id: str | None = None,
+                parser: str | None = None) -> dict:
     """完整入库单份文档：去重 → 复制原文 → 解析 → 结构化 → 质量检查 → 登记。
 
     薄包装：sha256 去重与 catalog 生命周期在这里，阶段串联交给
@@ -121,7 +122,7 @@ def ingest_path(path: Path, meta: dict | None = None, job_id: str | None = None)
         if existing is not None:
             return _existing_result(catalog, existing, sha256, job_id)
         return stages.run_document(
-            path, meta, sha256=sha256, catalog=catalog, job_id=job_id,
+            path, meta, sha256=sha256, catalog=catalog, job_id=job_id, parser=parser,
             on_stage=_job_callback(job_id),
         )
     finally:
@@ -215,8 +216,10 @@ def run_job(job_id: str) -> None:
             try:
                 if not file_path:
                     raise RuntimeError("上传文件路径缺失")
-                result = ingest_path(Path(file_path), meta=meta_for_file(meta, index),
-                                     job_id=job_id)
+                file_meta = meta_for_file(meta, index)
+                parser_choice = file_meta.get("parser") if isinstance(file_meta, dict) else None
+                result = ingest_path(Path(file_path), meta=file_meta, job_id=job_id,
+                                     parser=parser_choice)
                 docs.append({
                     "doc_id": result["doc_id"],
                     "title": result.get("title"),
