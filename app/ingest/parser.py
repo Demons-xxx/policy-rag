@@ -121,7 +121,8 @@ def _apply_page_ocr(parsed: dict, path: Path) -> dict:
     端点失败直接抛中文 RuntimeError，让入库任务失败得可解释。
     """
     endpoint = str(getattr(config, "OCR_ENDPOINT", "") or "").strip()
-    if not endpoint:
+    use_local = bool(getattr(config, "OCR_LOCAL", False))
+    if not endpoint and not use_local:
         return parsed
     pages = parsed.get("pages") or []
     threshold = int(getattr(config, "OCR_MIN_CHARS", 20) or 0)
@@ -132,9 +133,12 @@ def _apply_page_ocr(parsed: dict, path: Path) -> dict:
 
     import fitz
 
-    from app.ingest.ocr import OcrClient, OcrError, quality_issues
+    from app.ingest.ocr import LocalOcrClient, OcrClient, OcrError, quality_issues
 
-    client = OcrClient(endpoint, timeout=float(getattr(config, "OCR_TIMEOUT", 180) or 180))
+    if endpoint:
+        client = OcrClient(endpoint, timeout=float(getattr(config, "OCR_TIMEOUT", 180) or 180))
+    else:
+        client = LocalOcrClient(getattr(config, "OCR_MODEL_DIR", None))
     limit = int(getattr(config, "OCR_MAX_PAGES", 100) or 0)
     if limit:
         targets = targets[:limit]

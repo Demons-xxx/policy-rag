@@ -76,7 +76,7 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
 | 关键词检索 | jieba + 自建倒排 BM25 | 无模型文件 | 中文分词后做 BM25 打分 |
 | 元数据 | SQLite | `data/state/catalog.sqlite` | 文档登记、任务、发布记录 |
 | 大模型 | 任意 OpenAI 兼容接口 | `.env` 配置 | 必需；没有它只能检索不能生成 |
-| 扫描件 OCR | **外部 HTTP 服务**（不内置模型） | `POLICYRAG_OCR_ENDPOINT` | 可选；处理扫描件 PDF |
+| 扫描件 OCR | 本地 RapidOCR（ONNX，CPU）+ 可选外部 HTTP 端点 | `models/rapidocr/`（约 16 MB）；`POLICYRAG_OCR_ENDPOINT` 优先 | 默认本地，无需外部服务 |
 | PDF 版式解析 | docling（外部解释器子进程） | 外部运行时 + `models/docling/` 产物（已拷贝，约 367 MB） | 可选；本机默认 docling，可单次切回 pymupdf |
 | DOCX 页图 | 本机 Microsoft Word（COM） | 系统安装 | 可选；没有 Word 就跳过 |
 | 服务端 / 前端 | FastAPI + uvicorn / Vue 3 + Vite | `web/dist/` | 前端构建产物不进 Git |
@@ -90,7 +90,7 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
 | BGE 向量模型 | `models/bge-base-zh-v1.5` | `POLICYRAG_EMBEDDING_DIR`、`POLICYRAG_DEVICE` | 第一次检索/入库时报错；`/api/info` 的 `error` 字段会带原因 |
 | 重排模型 | `models/bge-reranker-v2-m3` | `POLICYRAG_RERANK=0/1`、`POLICYRAG_RERANK_MODEL_DIR`、`_TOP_N`、`_BATCH` | 模型缺失或加载失败：记一条 warning，回退到融合原排序，问答不受影响 |
 | 生成模型 | `.env` 的 `POLICYRAG_LLM_BASE_URL` | `..._MODEL`、`..._API_KEY`、`..._THINKING`、`RAG_LLM_RETRIES`、`RAG_LLM_FIRST_TOKEN_TIMEOUT` | `/api/info` 的 `model_ready=false`，问答返回「生成模型不可用」；重试策略见第 2.1.6 节 |
-| 扫描件 OCR | `POLICYRAG_OCR_ENDPOINT`（空 = 不做 OCR） | `POLICYRAG_OCR_DPI`、`_MIN_CHARS`、`_TIMEOUT`、`_MAX_PAGES` | 端点为空：扫描页保留原样并给「疑似扫描件」质量提示；端点失败：入库任务失败并给出「第 N 页 OCR 失败：原因」 |
+| 扫描件 OCR | 本地 RapidOCR（`models/rapidocr`，默认开）；配置 `POLICYRAG_OCR_ENDPOINT` 则优先外部端点 | `POLICYRAG_OCR_LOCAL`、`_MODEL_DIR`、`_DPI`、`_MIN_CHARS`、`_TIMEOUT`、`_MAX_PAGES` | 本地引擎缺包/权重且无端点：扫描页保留原样并给「疑似扫描件」提示；端点/本地 OCR 失败：入库任务失败并给出「第 N 页 OCR 失败：原因」 |
 | docling 解析 | 模型 `models/docling/`；解释器默认同盘 `../RAG/local_service/runtime/parse/Scripts/python.exe` | `POLICYRAG_PARSER_PDF=pymupdf/docling`、`POLICYRAG_DOCLING_PYTHON`、`_ARTIFACTS`、`_DEVICE`、`_TIMEOUT` | 解释器不存在时入库报中文错误，提示设置 `POLICYRAG_DOCLING_PYTHON`；选 pymupdf 时完全不受影响 |
 | Word 页图 | 本机 Word 的 COM 接口 | `POLICYRAG_DOCX_PREVIEW=1/0`、`POLICYRAG_DOCX_PREVIEW_TIMEOUT` | 无 Word / 转换失败：DOCX 文本照常入库，只记一条 `docx_preview` 提示，`has_pdf=0` |
 | 向量库 | `POLICYRAG_VECTOR_BACKEND=chroma` 或 `npz` | — | chroma 不可用时可选 `npz`（零外部依赖，但全量加载进内存） |
@@ -109,18 +109,20 @@ PolicyRAG 是一个「政策 / 制度 / 办事流程」知识库问答系统。�
 - 关闭：`POLICYRAG_RERANK=0`。关闭或模型缺失时系统仍可用，只是排序质量下降。
 - 与编码共用 GPU 并发信号量（`RAG_GPU_CONCURRENCY`，默认 2）：两张模型常驻显存，但同一时刻只有有限个推理在跑，避免并发请求把显存打满。
 
-#### 2.1.3 扫描件 OCR（可选，外部服务）
+#### 2.1.3 扫描件 OCR（默认本地 RapidOCR，可选外部端点）
 
-- 本项目**不内置 OCR 模型**，只实现客户端：PDF 每页先走 PyMuPDF 文本层，文本数 < `POLICYRAG_OCR_MIN_CHARS`（默认 20）的页渲染成 PNG，POST 到 `POLICYRAG_OCR_ENDPOINT`。
-- 端点契约（与同盘 RAG 项目的 `remote_ocr.py` 完全一致，可直接复用同一个服务）：
-  - 请求：`multipart/form-data`，字段名 `image`；
-  - 响应：`{"code": 0, "result": "markdown 文本"}`；`code` 非 0 视为失败。
-- 配置：`POLICYRAG_OCR_ENDPOINT`、`POLICYRAG_OCR_DPI=200`、`POLICYRAG_OCR_MIN_CHARS=20`、`POLICYRAG_OCR_TIMEOUT=180`、`POLICYRAG_OCR_MAX_PAGES=100`。
+PDF 每页先走文本层（PyMuPDF 或 docling），文本数 < `POLICYRAG_OCR_MIN_CHARS`（默认 20）的页渲染成 PNG，再按优先级选 OCR：
+
+1. **外部端点**（配置了 `POLICYRAG_OCR_ENDPOINT` 时）：`multipart/form-data` 字段 `image`，返回 `{"code": 0, "result": "markdown"}`；契约与同盘 RAG 项目的 `remote_ocr.py` 一致，可直接复用同一个服务。
+2. **本地 RapidOCR**（`POLICYRAG_OCR_LOCAL=1`，默认）：ONNX Runtime、CPU 推理，权重随项目放在 `models/rapidocr/`（3 个 onnx 共约 16 MB）；一页约 2–6 s，输出按阅读顺序的文本行，质量检查与外部端点相同。首次调用加载引擎约 1 s，进程内复用。
+
+- 两条路线都失败/都关闭时：能入库，扫描页保留空文本并在问题清单里提示「疑似扫描件」，问答不会引用这些页。
+- **能用大模型 API 当 OCR 吗？** 不能。纯文本模型（如 DeepSeek）没有图像输入；多模态模型虽然能“看图”，但整页 OCR 会漏字/编造、没有坐标与表格结构、按页计费成本高，只适合对 OCR 结果做后处理（校对、结构化），不适合替代 OCR 引擎。本项目不把 LLM 当 OCR 用。
+- 配置：`POLICYRAG_OCR_LOCAL=1/0`、`POLICYRAG_OCR_MODEL_DIR`（默认 `models/rapidocr`）、`POLICYRAG_OCR_ENDPOINT`、`POLICYRAG_OCR_DPI=200`、`POLICYRAG_OCR_MIN_CHARS=20`、`POLICYRAG_OCR_TIMEOUT=180`、`POLICYRAG_OCR_MAX_PAGES=100`。
 - 自测端点（任意一页 PNG）：
   ```bash
   curl -X POST http://127.0.0.1:8000/ocr -F "image=@page.png"
   ```
-- 不配端点：能入库，扫描页会保留空文本并在问题清单里提示「疑似扫描件」，问答不会引用这些页。
 
 #### 2.1.4 PDF 解析：pymupdf 还是 docling（可自选）
 

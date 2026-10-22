@@ -63,6 +63,8 @@ RERANK_BATCH = _settings.rerank_batch
 
 # ---- 入库解析：扫描件 OCR 与可选 docling 后端 ----
 OCR_ENDPOINT = _settings.ocr_endpoint
+OCR_LOCAL = _settings.ocr_local
+OCR_MODEL_DIR = _settings.ocr_model_dir
 OCR_DPI = _settings.ocr_dpi
 OCR_MIN_CHARS = _settings.ocr_min_chars
 OCR_TIMEOUT = _settings.ocr_timeout

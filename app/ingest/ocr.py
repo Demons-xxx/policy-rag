@@ -34,6 +34,72 @@ class OcrTruncated(OcrError):
     """OCR 输出被截断（达到 max tokens），该页需要人工复核。"""
 
 
+#: 本地 RapidOCR 引擎（进程内单例，避免每页重复加载模型）
+_LOCAL_ENGINE = None
+
+
+def _local_engine(model_dir: Path | str | None):
+    global _LOCAL_ENGINE
+    if _LOCAL_ENGINE is not None:
+        return _LOCAL_ENGINE
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as exc:  # pragma: no cover - 环境已装
+        raise OcrError(
+            '本地 OCR 不可用：未安装 rapidocr-onnxruntime'
+            '（pip install rapidocr-onnxruntime，或设置 POLICYRAG_OCR_LOCAL=0 关闭）'
+        ) from exc
+    root = Path(model_dir or '')
+    names = {
+        'det_model_path': 'ch_PP-OCRv4_det_infer.onnx',
+        'rec_model_path': 'ch_PP-OCRv4_rec_infer.onnx',
+        'cls_model_path': 'ch_ppocr_mobile_v2.0_cls_infer.onnx',
+    }
+    kwargs = {key: str(root / name) for key, name in names.items() if (root / name).is_file()}
+    if kwargs:
+        _LOCAL_ENGINE = RapidOCR(**kwargs)
+    else:
+        _LOCAL_ENGINE = RapidOCR()
+    return _LOCAL_ENGINE
+
+
+class LocalOcrClient:
+    """本地 OCR（RapidOCR / ONNX Runtime）：一次一页，返回纯文本行。
+
+    权重默认 `models/rapidocr/*.onnx`（项目自带），缺失时回退 RapidOCR 包内权重。
+    与 `OcrClient` 同签名，入库流程按 `POLICYRAG_OCR_ENDPOINT` 是否配置切换。
+    """
+
+    def __init__(self, model_dir: Path | str | None = None, min_score: float = 0.3) -> None:
+        self.model_dir = model_dir
+        self.min_score = min_score
+
+    def __call__(self, image: Path) -> tuple[str, dict]:
+        return self.recognize(image)
+
+    def recognize(self, image: Path) -> tuple[str, dict]:
+        engine = _local_engine(self.model_dir)
+        started = time.time()
+        try:
+            result, _elapse = engine(str(image))
+        except Exception as exc:  # noqa: BLE001 - 引擎内部错误统一转中文
+            raise OcrError(f'本地 OCR 失败：{exc}') from exc
+        rows = [row for row in (result or []) if len(row) >= 3]
+        rows = [row for row in rows if float(row[2]) >= self.min_score]
+        # 按阅读顺序排序：先上后下、同一行从左到右
+        rows.sort(key=lambda row: (min(point[1] for point in row[0]),
+                                   min(point[0] for point in row[0])))
+        lines = [str(row[1]).strip() for row in rows if str(row[1]).strip()]
+        scores = [float(row[2]) for row in rows]
+        meta = {
+            'engine': 'rapidocr',
+            'seconds': round(time.time() - started, 3),
+            'lines': len(lines),
+            'avg_score': round(sum(scores) / len(scores), 4) if scores else 0.0,
+        }
+        return '\n'.join(lines), meta
+
+
 class OcrClient:
     """极简 OCR HTTP 客户端：一次一页，multipart 上传 PNG。"""
 
