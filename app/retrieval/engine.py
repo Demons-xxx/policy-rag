@@ -266,6 +266,8 @@ class PolicyRetriever:
             'doc_no': parsed.get('doc_no'),
             'article': parsed.get('article'),
             'is_followup': parsed.get('is_followup'),
+            'top_k': int(top_k),
+            'release_id': self.release_id,
         })
 
         # ---- 结果缓存：同问、同过滤、同 release、同基准日直接复用（T9） ----
@@ -276,10 +278,12 @@ class PolicyRetriever:
         if cached is not None:
             cached['seconds'] = round(time.perf_counter() - started, 3)
             cached['cached'] = True
-            self._emit(on_stage, 'evidence', {
-                'titles': [evidence_builder.unit_label(item['unit']) for item in cached.get('results', [])],
-                'notes': list(cached.get('notes') or []),
-            })
+            self._emit(on_stage, 'evidence', self._evidence_event(
+                cached.get('results') or [], cached.get('notes') or [],
+                tokens=int(cached.get('tokens') or 0),
+                budget=int(getattr(config, 'MAX_CONTEXT_TOKENS', 4096) or 4096),
+                cached=True, seconds=cached.get('seconds'),
+            ))
             return cached
 
         # ---- 通道 1~6：每个子句跑一遍向量 / BM25 / 条款号 / 文号 / 章节 / 标题 ----
@@ -350,11 +354,15 @@ class PolicyRetriever:
         dense_ids = [pid for pid, _ in dense_hits]
         self._emit(on_stage, 'vectors', {
             'passage_count': len(dense_hits),
+            'max_score': round(max((score for _pid, score in dense_hits), default=0.0), 4),
+            'scores': [round(score, 4) for _pid, score in dense_hits[:5]],
             'titles': evidence_builder.labels_for_passages(
                 dense_ids, self.passage_map, self.unit_map, 5),
         })
         self._emit(on_stage, 'keywords', {
             'passage_count': len(keyword_hits),
+            'max_score': round(max((score for _pid, score in keyword_hits), default=0.0), 4),
+            'scores': [round(score, 4) for _pid, score in keyword_hits[:5]],
             'titles': evidence_builder.labels_for_passages(
                 [pid for pid, _ in keyword_hits], self.passage_map, self.unit_map, 5),
         })
@@ -364,7 +372,10 @@ class PolicyRetriever:
         gate = stage_filters.relevance_gate(dense_hits, exact_channels, min_dense)
         if gate.blocked:
             notes = ranking.dedupe(notes + [stage_filters.GATE_REFUSAL_NOTE])
-            self._emit(on_stage, 'evidence', {'titles': [], 'notes': notes})
+            self._emit(on_stage, 'evidence', self._evidence_event(
+                [], notes, tokens=0,
+                budget=int(getattr(config, 'MAX_CONTEXT_TOKENS', 4096) or 4096),
+            ))
             return {
                 'question': question,
                 'rewritten': rewritten,
@@ -485,10 +496,9 @@ class PolicyRetriever:
             f'[证据{item["rank"]}] {item["evidence"]}' for item in results
         )
         seconds = round(time.perf_counter() - started, 3)
-        self._emit(on_stage, 'evidence', {
-            'titles': [evidence_builder.unit_label(item['unit']) for item in results],
-            'notes': notes,
-        })
+        self._emit(on_stage, 'evidence', self._evidence_event(
+            results, notes, tokens=used_tokens, budget=budget, seconds=seconds,
+        ))
 
         payload = {
             'question': question,
@@ -515,6 +525,40 @@ class PolicyRetriever:
     # ------------------------------------------------------------------
     # 事件推送
     # ------------------------------------------------------------------
+    @staticmethod
+    def _evidence_event(results: list[dict], notes: list[str], *, tokens: int = 0,
+                        budget: int = 0, cached: bool = False,
+                        seconds: float | None = None) -> dict:
+        """evidence 事件的完整载荷：证据清单、分数、通道、token 预算与缓存状态。"""
+        items: list[dict] = []
+        for row in results or []:
+            if not isinstance(row, dict):
+                continue
+            unit = row.get('unit') or {}
+            citation = row.get('citation') or {}
+            items.append({
+                'rank': row.get('rank'),
+                'label': evidence_builder.unit_label(unit),
+                'doc_id': str(unit.get('doc_id') or citation.get('doc_id') or ''),
+                'article': str(citation.get('article') or unit.get('article') or ''),
+                'channels': list(row.get('channels') or []),
+                'scores': dict(row.get('scores') or {}),
+                'merged': len(row.get('merged_units') or []),
+                'pages': list(citation.get('pages') or []),
+            })
+        payload = {
+            'titles': [item['label'] for item in items],
+            'items': items,
+            'count': len(items),
+            'notes': list(notes or []),
+            'tokens': int(tokens or 0),
+            'budget': int(budget or 0),
+            'cached': bool(cached),
+        }
+        if seconds is not None:
+            payload['seconds'] = round(float(seconds), 3)
+        return payload
+
     @staticmethod
     def _emit(on_stage: Callable | None, stage: str, payload: dict) -> None:
         if not on_stage:

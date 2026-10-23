@@ -409,14 +409,18 @@ class AnswerFlow:
         question = (request.question or '').strip()
         history = prompts.normalize_history(request.history)
 
-        yield AnswerEvent('routing')
-
         llm, ready_error = self._prepare_llm()
         if llm is None:
+            yield AnswerEvent('routing')
             yield AnswerEvent('error', {'message': self._unavailable_message(ready_error)})
             return
 
         decision = self.route_step.run(llm, question, history)
+        yield AnswerEvent('routing', {
+            'mode': decision.mode,
+            'search_query': decision.search_query,
+            'reason': decision.reason,
+        })
         if decision.mode == 'chat':
             yield from self._chat(llm, question, history, started)
             return
@@ -496,11 +500,15 @@ class AnswerFlow:
                 'question': question,
                 'rewritten': str(result.get('rewritten') or rewritten),
                 'filters': result.get('filters') or {},
+                'top_k': config.TOP_K,
             })
         if 'evidence' not in seen:
             yield AnswerEvent('evidence', {
                 'titles': titles(result),
+                'count': len(titles(result)),
                 'notes': result.get('notes') or [],
+                'tokens': result.get('tokens') or 0,
+                'cached': bool(result.get('cached')),
             })
 
         messages = self.prompt_step.run(question, result.get('context') or '', history)
@@ -512,4 +520,5 @@ class AnswerFlow:
         if stats is None:
             return
         yield AnswerEvent('sources', {'items': sources})
-        yield AnswerEvent('done', done_payload(started, stats.truncated, stats.sanitized))
+        yield AnswerEvent('done', {**done_payload(started, stats.truncated, stats.sanitized),
+                                   'cached': bool(result.get('cached'))})

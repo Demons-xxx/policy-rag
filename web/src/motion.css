@@ -54,6 +54,10 @@
 .pane-enter-from,.pane-leave-to{opacity:0;transform:translateX(10px)}
 .pane-backdrop{animation:fade-in var(--dur-2) var(--ease-out) both}
 
+/* 侧栏较窄时品牌文字不折行 */
+.brand-text{min-width:0}
+.brand-text strong,.brand-text span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+
 /* ——— 流式状态 ——— */
 .streaming-pill{transition:opacity var(--dur-1) var(--ease-soft)}
 .streaming-secs{font-variant-numeric:tabular-nums;color:#93a09a;font-size:12px}

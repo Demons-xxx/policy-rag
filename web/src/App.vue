@@ -5,9 +5,10 @@ import {selectFiles} from './fileSelection'
 import {usePaneWidths} from './paneWidths'
 import Icon from './Icon.vue'
 import Workbench from './Workbench.vue'
+import FlowSteps from './FlowSteps.vue'
 
 type Source={id:number;doc_id:string;file:string;pages:number[];focus_page?:number|null;title?:string;text:string;article?:string|null;chapter?:string|null;doc_no?:string|null;version_label?:string|null}
-type Turn={id:string;question:string;quote?:string;answer:string;sources:Source[];events:any[];error?:string;seconds?:number;busy?:boolean;status?:string}
+type Turn={id:string;question:string;quote?:string;answer:string;sources:Source[];events:any[];error?:string;seconds?:number;busy?:boolean;status?:string;startedAt?:number;firstTokenMs?:number}
 type Session={id:string;title:string;turns:Turn[]}
 type PolicyDocument={id:string;name?:string;title?:string;doc_no?:string|null;version_label?:string|null;department?:string|null;status?:string;pages?:number;has_pdf?:boolean|number;effective_from?:string|null;effective_to?:string|null;supersedes?:string|null;superseded_by?:string|null}
 type Task={id:string;files?:string[];name?:string;status?:string;phase?:string;error?:string;active?:boolean;units?:number}
@@ -115,10 +116,6 @@ function openDocument(d:PolicyDocument){
  panel.value='source'
 }
 function toggleDocStatus(d:PolicyDocument){return setDocStatus(d,d.status==='repealed'?'active':'repealed')}
-function promptPreview(e:any){const messages=e.messages||[];return `系统要求：\n${messages[0]?.content?.slice(0,240)||''}\n\n问题：\n${messages.at(-1)?.content?.slice(0,1400)||''}`}
-function promptFull(e:any){return (e.messages||[]).map((m:any)=>`${({system:'系统提示词',user:'用户提示词',assistant:'助手消息'} as Record<string,string>)[m.role]||m.role}：\n${m.content}`).join('\n\n')}
-function stageLabel(e:any){return ({routing:'问题判断',query:'问题解析',vectors:'向量检索',keywords:'关键词检索',evidence:'证据筛选',prompt:'提示词',generating:'生成回答'} as Record<string,string>)[e.stage]||e.stage}
-function queryText(e:any){const parts:string[]=[];if(e.rewritten)parts.push(e.rewritten);const filters=e.filters||{};if(filters.department)parts.push('部门：'+filters.department);if(filters.as_of)parts.push('时点：'+filters.as_of);return parts.join(' · ')||e.question||''}
 function trackScroll(){if(quoteMenu.value)quoteMenu.value=null;if(conversation.value)atBottom.value=conversation.value.scrollHeight-conversation.value.scrollTop-conversation.value.clientHeight<100}
 async function scroll(){if(!atBottom.value||view.value!=='chat')return;await nextTick();if(conversation.value)conversation.value.scrollTop=conversation.value.scrollHeight}
 async function jumpToLatest(){atBottom.value=true;await nextTick();if(conversation.value)conversation.value.scrollTop=conversation.value.scrollHeight}
@@ -135,7 +132,7 @@ async function ask(questionOverride?:string,quoteOverride?:string){
  if(connectionError.value||!info.value?.model_ready){notice('服务尚未连接，请先重试连接');return}
  if(!current.value)newChat()
  view.value='chat';navOpen.value=false;input.value='';quote.value='';busy.value=true;nextTick(()=>composer.value?.focus())
- const turn=reactive<Turn>({id:newId(),question,quote:quoted,answer:'',sources:[],events:[],busy:true,status:'正在理解问题'})
+ const turn=reactive<Turn>({id:newId(),question,quote:quoted,answer:'',sources:[],events:[],busy:true,status:'正在理解问题',startedAt:performance.now()})
  const session=current.value!;session.turns.push(turn);if(session.title==='新对话')session.title=question.slice(0,22)
  const historyTurns=Math.max(1,Math.floor((info.value?.history_messages??8)/2))
  const history=session.turns.filter(t=>t.id!==turn.id&&!t.busy&&t.answer&&!t.error).slice(-historyTurns).flatMap(t=>[{role:'user',content:t.question},{role:'assistant',content:t.answer.slice(0,4000)}])
@@ -151,15 +148,18 @@ async function ask(questionOverride?:string,quoteOverride?:string){
   frame=shown<raw.length?requestAnimationFrame(pump):null
  }
  function addText(delta:string){raw+=delta;if(frame===null&&shown<raw.length)frame=requestAnimationFrame(pump)}
- function receive(e:any){if(e.stage==='answer'){addText(e.text)}
-  else if(e.stage==='waiting')turn.status=e.message
+ function record(e:any){e.at=performance.now();turn.events.push(e)}
+ function receive(e:any){
+  if(e.stage==='answer'){if(turn.firstTokenMs===undefined)turn.firstTokenMs=performance.now()-(turn.startedAt||performance.now());addText(e.text);return}
+  if(e.stage==='waiting')turn.status=e.message
   else if(e.stage==='routing')turn.status='正在理解问题'
   else if(e.stage==='generating')turn.status='正在生成回答'
   else if(e.stage==='revision'){raw=e.text;shown=raw.length;turn.answer=raw}
-  else if(e.stage==='sources')turn.sources=(e.items||[]).map(normalizeSource)
-  else if(e.stage==='done'){completed=true;turn.seconds=e.seconds;if(e.output_truncated)turn.error='本次回答达到长度上限';}
+  else if(e.stage==='sources'){turn.sources=(e.items||[]).map(normalizeSource);record({stage:'sources',count:(e.items||[]).length});return}
+  else if(e.stage==='done'){completed=true;turn.seconds=e.seconds;if(e.output_truncated)turn.error='本次回答达到长度上限'}
   else if(e.stage==='error')turn.error=e.message
-  else {if(e.stage==='query')turn.status='正在理解问题';else if(e.stage==='vectors')turn.status='正在检索相关条款';else if(e.stage==='keywords')turn.status='正在核对关键词与文号';else if(e.stage==='evidence')turn.status=e.titles?.length?`已找到 ${e.titles.length} 条证据`:'未找到直接依据';else if(e.stage==='prompt')turn.status='正在起草回答';turn.events.push(e)}
+  else {if(e.stage==='query')turn.status='正在理解问题';else if(e.stage==='vectors')turn.status='正在检索相关条款';else if(e.stage==='keywords')turn.status='正在核对关键词与文号';else if(e.stage==='evidence')turn.status=(e.count||e.titles?.length)?`已找到 ${e.count||e.titles.length} 条证据`:'未找到直接依据';else if(e.stage==='prompt')turn.status='正在起草回答'}
+  record(e)
  }
  try{
   const response=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:quoted?`针对这段原文：\n> ${quoted.replace(/\s+/g,' ').slice(0,300)}\n\n${question}`:question,history,run_tag:'web'}),signal:controller.signal})
@@ -284,7 +284,7 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
     <div ref="conversation" class="conversation" @scroll="trackScroll">
      <div v-if="!current?.turns.length" class="empty-chat"><span class="empty-symbol"><Icon name="chat"/></span><h1>今天想查点什么？</h1><p class="empty-sub">制度条款、流程、时限与标准都能直接问；回答只依据现行原文，并给出出处。</p><div class="suggestions"><button v-for="q in examples" :key="q" :disabled="busy||!info?.model_ready||Boolean(connectionError)" @click="ask(q)">{{q}}<Icon name="arrow"/></button></div><p class="shortcut-hint">Enter 发送 · Shift+Enter 换行 · Ctrl K 命令面板 · Esc 停止生成</p></div>
      <div v-else class="turn-list"><section v-for="turn in current.turns" :key="turn.id" class="turn"><div class="user-question"><blockquote v-if="turn.quote" class="u-quote">{{turn.quote}}</blockquote><span class="u-text">{{turn.question}}</span></div><div class="assistant-answer">
-      <details v-if="flow&&turn.events.length" class="flow-block" open><summary>检索流程<Icon name="chevron"/></summary><div v-for="(e,i) in turn.events" :key="i" class="flow-step"><span class="step-dot"></span><div><strong>{{stageLabel(e)}}</strong><p v-if="e.stage==='routing'">{{e.reason||'进入制度检索'}}</p><p v-else-if="e.stage==='query'">{{queryText(e)}}</p><template v-else-if="e.stage==='vectors'||e.stage==='keywords'"><p>{{e.passage_count||0}} 个候选片段</p><ul v-if="e.titles?.length"><li v-for="(t,j) in e.titles" :key="j">{{t.title||t}}</li></ul></template><template v-else-if="e.stage==='evidence'"><ul v-if="e.titles?.length"><li v-for="(t,j) in e.titles" :key="j">{{t.title||t}}</li></ul><p v-else>未找到匹配条目</p><p v-for="(n,j) in (e.notes||[])" :key="'n'+j">{{n}}</p></template><div v-else-if="e.stage==='prompt'" class="prompt-area"><button v-if="e.messages?.length" class="quiet-button prompt-toggle" @click="e.expanded=!e.expanded">{{e.expanded?'收起完整提示词':'展开完整提示词'}}</button><pre :class="{'complete-prompt':e.expanded}">{{e.expanded?promptFull(e):promptPreview(e)}}</pre></div></div></div></details>
+      <FlowSteps v-if="flow&&turn.events.length" :events="turn.events" :seconds="turn.seconds" :first-token-ms="turn.firstTokenMs"/>
       <div v-if="turn.answer" class="answer-body" :class="{streaming:turn.busy}"><MarkdownText :text="turn.answer" :sources="turn.sources" @cite="answerCite($event,turn)"/></div><div v-else-if="turn.busy" class="answer-loading"><span class="loading-dot"></span>{{turn.status||'正在查找制度'}}</div>
       <div v-if="turn.error" class="inline-error" role="status"><span>{{turn.error}}</span><button v-if="!turn.busy" class="quiet-button" :disabled="busy" @click="ask(turn.question)">重新提问</button></div>
       <div v-if="turn.sources.length" class="sources"><div class="sources-label">参考来源</div><button v-for="(s,i) in turn.sources" :key="i" :title="s.file" @click="openSource(s)"><span class="source-number">{{s.id}}</span><span class="source-name">{{s.file}}</span><span class="source-page">{{s.article?s.article+' · ':''}}第{{(s.pages||[1]).join('、')}}页</span><Icon name="chevron"/></button></div>
