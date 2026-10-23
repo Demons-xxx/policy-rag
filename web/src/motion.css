@@ -1,0 +1,64 @@
+/* 动效层（T25）：统一缓动/时长，只动 transform 与 opacity。
+   依据：进入用 ease-out、悬停/颜色用 ease、100+ 次/天的高频控件不做动画；
+   时长：微交互 100–150ms，面板 170–240ms；成对元素（遮罩+面板）同参数。 */
+
+:root{
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-soft:cubic-bezier(.33,0,.2,1);
+  --dur-1:110ms;
+  --dur-2:170ms;
+  --dur-3:240ms;
+}
+
+/* ——— 进入动画 ——— */
+@keyframes rise-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes fade-in{from{opacity:0}to{opacity:1}}
+.turn-list>.turn:last-child{animation:rise-in var(--dur-3) var(--ease-out) both}
+.empty-chat{animation:fade-in var(--dur-2) var(--ease-soft) both}
+.suggestions button{animation:rise-in var(--dur-3) var(--ease-out) both}
+.suggestions button:nth-child(1){animation-delay:20ms}
+.suggestions button:nth-child(2){animation-delay:55ms}
+.suggestions button:nth-child(3){animation-delay:90ms}
+.suggestions button:nth-child(4){animation-delay:125ms}
+.suggestions button:nth-child(5){animation-delay:160ms}
+.suggestions button:nth-child(6){animation-delay:195ms}
+.toast{animation:rise-in var(--dur-2) var(--ease-out) both}
+.jump-latest{animation:fade-in var(--dur-2) var(--ease-out) both}
+
+/* ——— 交互反馈：统一过渡，只在 transform/opacity/颜色上花时间 ——— */
+.nav-button,.session-row,.icon-button,.quiet-button,.primary-button,.suggestions button,
+.sources>button,.source-tabs button,.palette-item,.send-button,.quote-chip-close,
+.session-delete,.session-rename,.sidebar-toggle,.page-title{
+  transition:background-color var(--dur-1) var(--ease-soft),color var(--dur-1) var(--ease-soft),
+             border-color var(--dur-1) var(--ease-soft),box-shadow var(--dur-2) var(--ease-out),
+             transform var(--dur-1) var(--ease-out),opacity var(--dur-1) var(--ease-soft);
+}
+.primary-button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 16px #227a5f2e}
+.primary-button:active:not(:disabled){transform:scale(.965)}
+.send-button:active:not(:disabled){transform:scale(.94)}
+.suggestions button:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 20px #23352a12}
+.icon-button:active:not(:disabled){transform:scale(.94)}
+.session-row:active{transform:scale(.995)}
+
+/* ——— 输入区 ——— */
+.composer{transition:border-color var(--dur-1) var(--ease-soft),box-shadow var(--dur-2) var(--ease-out),background-color var(--dur-1)}
+.composer:focus-within{box-shadow:0 0 0 4px #287b6914}
+/* 高度跟随内容（Chrome 123+），不再用 JS 量 scrollHeight */
+.composer textarea{field-sizing:content}
+
+/* ——— 侧栏折叠与面板滑动 ——— */
+.workspace{transition:grid-template-columns var(--dur-3) var(--ease-soft)}
+.workspace.resizing{transition:none}
+.sidebar{transition:padding var(--dur-3) var(--ease-soft)}
+.pane-enter-active,.pane-leave-active{transition:opacity var(--dur-2) var(--ease-out),transform var(--dur-2) var(--ease-out)}
+.pane-enter-from,.pane-leave-to{opacity:0;transform:translateX(10px)}
+.pane-backdrop{animation:fade-in var(--dur-2) var(--ease-out) both}
+
+/* ——— 流式状态 ——— */
+.streaming-pill{transition:opacity var(--dur-1) var(--ease-soft)}
+.streaming-secs{font-variant-numeric:tabular-nums;color:#93a09a;font-size:12px}
+
+/* ——— 系统开启「减少动态效果」时全部退化为瞬时 ——— */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important}
+}

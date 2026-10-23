@@ -24,6 +24,7 @@ let controller:AbortController|null=null,toastTimer:ReturnType<typeof setTimeout
 const fileMeta=ref<Record<string,Record<string,string>>>({})
 let uploadRequest:XMLHttpRequest|null=null,disposed=false,storageWarning=false,libraryRequest:Promise<void>|null=null
 const quoteMenu=ref<{x:number;y:number}|null>(null)
+const elapsed=ref(0)
 const paletteOpen=ref(false),paletteQuery=ref(''),paletteIndex=ref(0),paletteInput=ref<HTMLInputElement|null>(null)
 const sidebarCollapsed=ref(localStorage.getItem('policy-rag-sidebar')==='1')
 type PaletteItem={icon:string;label:string;hint?:string;run:()=>void}
@@ -139,13 +140,22 @@ async function ask(questionOverride?:string,quoteOverride?:string){
  const historyTurns=Math.max(1,Math.floor((info.value?.history_messages??8)/2))
  const history=session.turns.filter(t=>t.id!==turn.id&&!t.busy&&t.answer&&!t.error).slice(-historyTurns).flatMap(t=>[{role:'user',content:t.question},{role:'assistant',content:t.answer.slice(0,4000)}])
  panel.value=null;atBottom.value=true;await nextTick();if(conversation.value)conversation.value.scrollTop=conversation.value.scrollHeight
- controller=new AbortController();let pending='',buffer='',flushTimer:ReturnType<typeof setTimeout>|null=null,completed=false
- function flush(){if(pending){turn.answer+=pending;pending='';if(sessionId.value===session.id)scroll()}flushTimer=null}
- function receive(e:any){if(e.stage==='answer'){pending+=e.text;if(!flushTimer)flushTimer=setTimeout(flush,80)}
+ controller=new AbortController();let buffer='',completed=false
+ // 网络流与视觉流解耦：收到的文本先进缓冲，按帧均匀放出（参考 Claude / Upstash smooth streaming）
+ let raw='',shown=0,frame:number|null=null
+ const startedAt=Date.now();elapsed.value=0
+ const ticker=setInterval(()=>{elapsed.value=Math.round((Date.now()-startedAt)/1000)},1000)
+ function scrollNow(){if(atBottom.value&&sessionId.value===session.id&&conversation.value)conversation.value.scrollTop=conversation.value.scrollHeight}
+ function pump(){
+  if(shown<raw.length){const backlog=raw.length-shown;const step=Math.max(1,Math.min(24,Math.ceil(backlog/8)));shown=Math.min(raw.length,shown+step);turn.answer=raw.slice(0,shown);scrollNow()}
+  frame=shown<raw.length?requestAnimationFrame(pump):null
+ }
+ function addText(delta:string){raw+=delta;if(frame===null&&shown<raw.length)frame=requestAnimationFrame(pump)}
+ function receive(e:any){if(e.stage==='answer'){addText(e.text)}
   else if(e.stage==='waiting')turn.status=e.message
   else if(e.stage==='routing')turn.status='正在理解问题'
   else if(e.stage==='generating')turn.status='正在生成回答'
-  else if(e.stage==='revision'){flush();turn.answer=e.text}
+  else if(e.stage==='revision'){raw=e.text;shown=raw.length;turn.answer=raw}
   else if(e.stage==='sources')turn.sources=(e.items||[]).map(normalizeSource)
   else if(e.stage==='done'){completed=true;turn.seconds=e.seconds;if(e.output_truncated)turn.error='本次回答达到长度上限';}
   else if(e.stage==='error')turn.error=e.message
@@ -160,7 +170,7 @@ async function ask(questionOverride?:string,quoteOverride?:string){
   buffer+=decoder.decode();if(buffer.trim())receive(JSON.parse(buffer))
   if(!completed&&!turn.error)turn.error='连接中断，回答尚未完成，可重新提问'
  }catch(e:any){turn.error=e.name==='AbortError'?'已停止':e instanceof TypeError?'连接中断，请检查网络后重试':e.message}
- finally{if(flushTimer)clearTimeout(flushTimer);flush();busy.value=false;turn.busy=false;controller=null;persist();if(turn.error==='已停止')nextTick(()=>composer.value?.focus())}
+ finally{clearInterval(ticker);if(frame){cancelAnimationFrame(frame);frame=null}turn.answer=raw;busy.value=false;turn.busy=false;controller=null;persist();if(turn.error==='已停止')nextTick(()=>composer.value?.focus())}
 }
 let copiedTimer:ReturnType<typeof setTimeout>|null=null
 async function copyText(text:string){
@@ -278,7 +288,7 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
       <div v-if="turn.answer" class="answer-body" :class="{streaming:turn.busy}"><MarkdownText :text="turn.answer" :sources="turn.sources" @cite="answerCite($event,turn)"/></div><div v-else-if="turn.busy" class="answer-loading"><span class="loading-dot"></span>{{turn.status||'正在查找制度'}}</div>
       <div v-if="turn.error" class="inline-error" role="status"><span>{{turn.error}}</span><button v-if="!turn.busy" class="quiet-button" :disabled="busy" @click="ask(turn.question)">重新提问</button></div>
       <div v-if="turn.sources.length" class="sources"><div class="sources-label">参考来源</div><button v-for="(s,i) in turn.sources" :key="i" :title="s.file" @click="openSource(s)"><span class="source-number">{{s.id}}</span><span class="source-name">{{s.file}}</span><span class="source-page">{{s.article?s.article+' · ':''}}第{{(s.pages||[1]).join('、')}}页</span><Icon name="chevron"/></button></div>
-      <div v-if="turn.busy" class="streaming-pill"><span class="streaming-dot"></span>{{turn.status||'正在生成回答'}}</div><div v-if="!turn.busy" class="answer-actions"><button class="icon-button" aria-label="重新生成" title="用同一上下文重新生成" :disabled="busy" @click="regenerate(turn)"><Icon name="refresh"/></button><button class="icon-button" aria-label="导出 Markdown" title="导出问题/回答/来源" @click="exportTurn(turn)"><Icon name="download"/></button><button class="icon-button" :aria-label="copiedId===turn.id?'已复制':'复制回答'" :title="copiedId===turn.id?'已复制':'复制回答'" @click="copy(turn)"><Icon :name="copiedId===turn.id?'check':'copy'"/></button><span v-if="turn.seconds">{{turn.seconds.toFixed(1)}}秒</span></div>
+      <div v-if="turn.busy" class="streaming-pill"><span class="streaming-dot"></span>{{turn.status||'正在生成回答'}}<span v-if="elapsed>0" class="streaming-secs">{{elapsed}}s</span></div><div v-if="!turn.busy" class="answer-actions"><button class="icon-button" aria-label="重新生成" title="用同一上下文重新生成" :disabled="busy" @click="regenerate(turn)"><Icon name="refresh"/></button><button class="icon-button" aria-label="导出 Markdown" title="导出问题/回答/来源" @click="exportTurn(turn)"><Icon name="download"/></button><button class="icon-button" :aria-label="copiedId===turn.id?'已复制':'复制回答'" :title="copiedId===turn.id?'已复制':'复制回答'" @click="copy(turn)"><Icon :name="copiedId===turn.id?'check':'copy'"/></button><span v-if="turn.seconds">{{turn.seconds.toFixed(1)}}秒</span></div>
      </div></section></div>
     </div>
     <button v-if="!atBottom&&current?.turns.length" class="jump-latest quiet-button" @click="jumpToLatest">{{busy?'有新内容 · 回到最新':'回到最新回答 ↓'}}</button>
@@ -291,7 +301,7 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
    </div>
   </main>
   <button v-if="panel" class="pane-backdrop" aria-label="收起资料面板" @click="panel=null"></button>
-  <aside v-if="panel" class="detail-pane"><div class="pane-resizer detail-resizer" role="separator" tabindex="0" aria-label="调整资料面板宽度" aria-orientation="vertical" :aria-valuenow="panes.detailWidth.value" aria-valuemin="320" :aria-valuemax="panes.detailMax.value" title="拖动调整宽度，双击恢复" @pointerdown="panes.start($event,'detail')" @keydown="panes.key($event,'detail')" @dblclick="panes.reset('detail')"></div><Workbench v-if="selectedSource||selectedDoc" :source="selectedSource" :doc="selectedDoc" :docs="documents" :question="selectedTurn?.question" :answer="selectedTurn?.answer" :sources="selectedTurn?.sources||[]" :busy="busy" @close="panel=null" @toggle-status="toggleDocStatus"/></aside>
+  <Transition name="pane"><aside v-if="panel" class="detail-pane"><div class="pane-resizer detail-resizer" role="separator" tabindex="0" aria-label="调整资料面板宽度" aria-orientation="vertical" :aria-valuenow="panes.detailWidth.value" aria-valuemin="320" :aria-valuemax="panes.detailMax.value" title="拖动调整宽度，双击恢复" @pointerdown="panes.start($event,'detail')" @keydown="panes.key($event,'detail')" @dblclick="panes.reset('detail')"></div><Workbench v-if="selectedSource||selectedDoc" :source="selectedSource" :doc="selectedDoc" :docs="documents" :question="selectedTurn?.question" :answer="selectedTurn?.answer" :sources="selectedTurn?.sources||[]" :busy="busy" @close="panel=null" @toggle-status="toggleDocStatus"/></aside></Transition>
  </div>
  <div v-if="uploadOpen" class="modal-backdrop" @click.self="!uploading&&(uploadOpen=false)"><section class="modal upload-modal"><header><h2>上传制度资料</h2><button class="icon-button" aria-label="关闭上传" :disabled="uploading" @click="uploadOpen=false"><Icon name="close"/></button></header><div class="drop-zone" @dragover.prevent @drop="drop" @click="!uploading&&fileInput?.click()"><Icon name="upload"/><strong>拖入 PDF、DOCX、MD 或 TXT，或选择文件</strong><input ref="fileInput" type="file" accept=".pdf,.docx,.md,.txt" multiple hidden aria-label="选择制度文件" @change="acceptFiles(($event.target as HTMLInputElement).files)"></div><div v-if="files.length" class="selection-summary">{{files.length}}份文件 · {{(files.reduce((n,f)=>n+f.size,0)/1024/1024).toFixed(1)}}MB</div><div class="selected-files"><div v-for="(f,i) in files" :key="f.name"><Icon name="file"/><span>{{f.name}}</span><button class="icon-button" aria-label="移除文件" :disabled="uploading" @click="files.splice(i,1)"><Icon name="close"/></button></div></div>
   <div class="upload-fields"><label>制度名称 *<input v-model="form.title" placeholder="例如：XX大学实验室安全管理办法" :disabled="uploading"></label><label>文号<input v-model="form.doc_no" placeholder="例如：校发〔2025〕27号" :disabled="uploading"></label><label>版本<input v-model="form.version_label" placeholder="例如：2025年修订版" :disabled="uploading"></label><label>归口部门<input v-model="form.department" placeholder="例如：实验室与设备管理处" :disabled="uploading"></label><label>生效日期<input v-model="form.effective_from" type="date" :disabled="uploading"></label><label>废止日期<input v-model="form.effective_to" type="date" :disabled="uploading"></label></div><div v-if="files.length>1" class="upload-fields per-file"><strong class="per-file-hint">已选择多份文件，请为每份填写制度名称（其余字段沿用上方填写值）</strong><div v-for="f in files" :key="fileKey(f)" class="per-file-row"><span class="per-file-name">{{f.name}}</span><label>制度名称 *<input v-model="fileMetaFor(f).title" placeholder="该文件的制度名称" :disabled="uploading"></label><label>文号<input v-model="fileMetaFor(f).doc_no" placeholder="可留空" :disabled="uploading"></label></div></div><div v-if="uploading" class="upload-progress"><span :style="{width:uploadProgress+'%'}"></span></div><footer><button class="quiet-button" :disabled="uploading" @click="uploadOpen=false">取消</button><button class="primary-button" :disabled="uploading||!files.length||missingTitle()" @click="upload">{{uploading?`上传中 ${uploadProgress}%`:'上传并入库'}}</button></footer>
