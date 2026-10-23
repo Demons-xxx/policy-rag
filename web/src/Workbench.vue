@@ -125,7 +125,7 @@ function filterName(text:string){return String(text||'export').replace(/[\\/:*?"
 </script>
 
 <template>
- <header class="wb-head"><div class="wb-title"><strong>工作台</strong><span v-if="doc">{{doc.title||doc.name||doc.id}}</span></div><button class="icon-button" aria-label="关闭工作台" @click="emit('close')"><Icon name="close"/></button></header>
+ <header class="wb-head"><div class="wb-title"><strong>工作台</strong><span v-if="doc">{{doc.title||doc.name||doc.id}}</span></div><div class="wb-head-actions"><button class="icon-button" :aria-label="copied?'已复制':'复制 Markdown'" :title="copied?'已复制':'复制回答 Markdown'" @click="copy(markdown(),'已复制回答 Markdown')"><Icon :name="copied?'check':'copy'"/></button><a v-if="hasPdf" class="icon-button" :href="pdfUrl.split('#')[0]" download title="下载 PDF 原文" aria-label="下载 PDF 原文"><Icon name="download"/></a><button class="icon-button" aria-label="关闭工作台" @click="emit('close')"><Icon name="close"/></button></div></header>
  <nav class="wb-tabs" aria-label="工作台视图">
   <button :class="{active:tab==='text'}" @click="tab='text'">原文</button>
   <button :class="{active:tab==='compare'}" @click="tab='compare'">对比<span v-if="comparable" class="tab-dot" aria-label="有可对照版本"></span></button>
@@ -191,7 +191,9 @@ function filterName(text:string){return String(text||'export').replace(/[\\/:*?"
 </template>
 
 <style scoped>
-.wb-head{height:66px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 22px;border-bottom:1px solid var(--line)}
+.wb-head{height:66px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 22px;border-bottom:1px solid var(--line)}
+.wb-head-actions{display:flex;align-items:center;gap:1px}
+a.icon-button{color:var(--muted);text-decoration:none}
 .wb-title{display:flex;flex-direction:column;gap:2px;min-width:0}
 .wb-title strong{font-size:15px}
 .wb-title span{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

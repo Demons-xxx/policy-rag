@@ -7,7 +7,7 @@ import Icon from './Icon.vue'
 import Workbench from './Workbench.vue'
 
 type Source={id:number;doc_id:string;file:string;pages:number[];focus_page?:number|null;title?:string;text:string;article?:string|null;chapter?:string|null;doc_no?:string|null;version_label?:string|null}
-type Turn={id:string;question:string;answer:string;sources:Source[];events:any[];error?:string;seconds?:number;busy?:boolean;status?:string}
+type Turn={id:string;question:string;quote?:string;answer:string;sources:Source[];events:any[];error?:string;seconds?:number;busy?:boolean;status?:string}
 type Session={id:string;title:string;turns:Turn[]}
 type PolicyDocument={id:string;name?:string;title?:string;doc_no?:string|null;version_label?:string|null;department?:string|null;status?:string;pages?:number;has_pdf?:boolean|number;effective_from?:string|null;effective_to?:string|null;supersedes?:string|null;superseded_by?:string|null}
 type Task={id:string;files?:string[];name?:string;status?:string;phase?:string;error?:string;active?:boolean;units?:number}
@@ -16,13 +16,14 @@ const view=ref<'chat'|'library'>('chat'),navOpen=ref(false),librarySearch=ref(''
 const info=ref<any>(null),documents=ref<PolicyDocument[]>([]),tasks=ref<Task[]>([])
 const sessions=ref<Session[]>([]),sessionId=ref(''),input=ref(''),busy=ref(false),flow=ref(false)
 const panel=ref<'source'|null>(null),selectedSource=ref<Source|null>(null)
-const selectedTurn=ref<Turn|null>(null),toast=ref(''),conversation=ref<HTMLElement|null>(null),composer=ref<HTMLTextAreaElement|null>(null)
+const selectedTurn=ref<Turn|null>(null),toast=ref(''),quote=ref(''),copiedId=ref(''),conversation=ref<HTMLElement|null>(null),composer=ref<HTMLTextAreaElement|null>(null)
 const uploading=ref(false),uploadOpen=ref(false),files=ref<File[]>([]),uploadProgress=ref(0),fileInput=ref<HTMLInputElement|null>(null)
 const form=reactive({title:'',doc_no:'',version_label:'',effective_from:'',effective_to:'',department:''})
 const libraryLoading=ref(false),libraryError=ref(''),connectionLoading=ref(false),connectionError=ref(''),atBottom=ref(true),retryBusy=ref('')
 let controller:AbortController|null=null,toastTimer:ReturnType<typeof setTimeout>|null=null
 const fileMeta=ref<Record<string,Record<string,string>>>({})
 let uploadRequest:XMLHttpRequest|null=null,disposed=false,storageWarning=false,libraryRequest:Promise<void>|null=null
+const quoteMenu=ref<{x:number;y:number}|null>(null)
 const paletteOpen=ref(false),paletteQuery=ref(''),paletteIndex=ref(0),paletteInput=ref<HTMLInputElement|null>(null)
 const sidebarCollapsed=ref(localStorage.getItem('policy-rag-sidebar')==='1')
 type PaletteItem={icon:string;label:string;hint?:string;run:()=>void}
@@ -74,6 +75,30 @@ function deleteSession(s:Session){
  if(sessionId.value===s.id){selectedSource.value=null;selectedTurn.value=null;newChat()}
  else persist()
 }
+function selectionMenu(){
+ const sel=window.getSelection()
+ if(!sel||sel.isCollapsed||!sel.rangeCount){quoteMenu.value=null;return}
+ const text=sel.toString().trim()
+ if(text.length<4||text.length>400){quoteMenu.value=null;return}
+ const anchorNode=sel.anchorNode
+ const element=anchorNode&&anchorNode.nodeType===1?(anchorNode as Element):anchorNode?.parentElement
+ if(!element?.closest('.answer-body .prose')){quoteMenu.value=null;return}
+ const rect=sel.getRangeAt(0).getBoundingClientRect()
+ if(!rect.width&&!rect.height){quoteMenu.value=null;return}
+ const x=Math.min(window.innerWidth-100,Math.max(100,rect.left+rect.width/2))
+ let y=rect.top-42
+ if(y<58)y=Math.min(window.innerHeight-52,rect.bottom+10)
+ quoteMenu.value={x,y}
+}
+function useQuote(){
+ const sel=window.getSelection(),text=(sel?.toString()||'').trim()
+ if(!text)return
+ quote.value=text.slice(0,300)
+ quoteMenu.value=null
+ sel?.removeAllRanges()
+ nextTick(()=>composer.value?.focus())
+}
+function clearQuote(){quote.value='';nextTick(()=>composer.value?.focus())}
 function answerCite(id:number,turn:Turn){const source=turn.sources.find(s=>s.id===id);if(source)openSource(source,turn)}
 function documentFor(docId?:string|null){return documents.value.find(d=>d.id===docId)}
 function openSource(source:Source,turn:Turn|null=null){
@@ -93,7 +118,7 @@ function promptPreview(e:any){const messages=e.messages||[];return `系统要求
 function promptFull(e:any){return (e.messages||[]).map((m:any)=>`${({system:'系统提示词',user:'用户提示词',assistant:'助手消息'} as Record<string,string>)[m.role]||m.role}：\n${m.content}`).join('\n\n')}
 function stageLabel(e:any){return ({routing:'问题判断',query:'问题解析',vectors:'向量检索',keywords:'关键词检索',evidence:'证据筛选',prompt:'提示词',generating:'生成回答'} as Record<string,string>)[e.stage]||e.stage}
 function queryText(e:any){const parts:string[]=[];if(e.rewritten)parts.push(e.rewritten);const filters=e.filters||{};if(filters.department)parts.push('部门：'+filters.department);if(filters.as_of)parts.push('时点：'+filters.as_of);return parts.join(' · ')||e.question||''}
-function trackScroll(){if(conversation.value)atBottom.value=conversation.value.scrollHeight-conversation.value.scrollTop-conversation.value.clientHeight<100}
+function trackScroll(){if(quoteMenu.value)quoteMenu.value=null;if(conversation.value)atBottom.value=conversation.value.scrollHeight-conversation.value.scrollTop-conversation.value.clientHeight<100}
 async function scroll(){if(!atBottom.value||view.value!=='chat')return;await nextTick();if(conversation.value)conversation.value.scrollTop=conversation.value.scrollHeight}
 async function jumpToLatest(){atBottom.value=true;await nextTick();if(conversation.value)conversation.value.scrollTop=conversation.value.scrollHeight}
 function statusLabel(status?:string){return ({active:'现行',superseded:'已被替代',repealed:'已废止'} as Record<string,string>)[status||'']||status||'未知'}
@@ -101,14 +126,15 @@ function taskStatus(task:Task){return ({queued:'排队中',running:'处理中',d
 function taskLabel(task:Task){return task.files?.join('、')||task.name||task.id}
 function taskBadgeClass(task:Task){return {success:task.status==='done',processing:task.active||task.status==='running'||task.status==='queued'}}
 function normalizeSource(s:any):Source{return {id:Number(s?.id)||0,doc_id:String(s?.doc_id||''),file:String(s?.file||s?.title||'制度文档'),pages:Array.isArray(s?.pages)&&s.pages.length?s.pages.filter((p:any)=>Number.isInteger(p)&&p>0):[1],focus_page:typeof s?.focus_page==='number'?s.focus_page:null,title:String(s?.title||s?.file||''),text:String(s?.text||''),article:s?.article||null,chapter:s?.chapter||null,doc_no:s?.doc_no||null,version_label:s?.version_label||null}}
-async function ask(questionOverride?:string){
+async function ask(questionOverride?:string,quoteOverride?:string){
  if(busy.value)return
  const question=(questionOverride??input.value).trim()
+ const quoted=String(quoteOverride??quote.value??'').trim().slice(0,300)
  if(question.length<1||question.length>500){notice('请输入1—500字');return}
  if(connectionError.value||!info.value?.model_ready){notice('服务尚未连接，请先重试连接');return}
  if(!current.value)newChat()
- view.value='chat';navOpen.value=false;input.value='';busy.value=true;nextTick(()=>composer.value?.focus())
- const turn=reactive<Turn>({id:newId(),question,answer:'',sources:[],events:[],busy:true,status:'正在理解问题'})
+ view.value='chat';navOpen.value=false;input.value='';quote.value='';busy.value=true;nextTick(()=>composer.value?.focus())
+ const turn=reactive<Turn>({id:newId(),question,quote:quoted,answer:'',sources:[],events:[],busy:true,status:'正在理解问题'})
  const session=current.value!;session.turns.push(turn);if(session.title==='新对话')session.title=question.slice(0,22)
  const historyTurns=Math.max(1,Math.floor((info.value?.history_messages??8)/2))
  const history=session.turns.filter(t=>t.id!==turn.id&&!t.busy&&t.answer&&!t.error).slice(-historyTurns).flatMap(t=>[{role:'user',content:t.question},{role:'assistant',content:t.answer.slice(0,4000)}])
@@ -123,10 +149,10 @@ async function ask(questionOverride?:string){
   else if(e.stage==='sources')turn.sources=(e.items||[]).map(normalizeSource)
   else if(e.stage==='done'){completed=true;turn.seconds=e.seconds;if(e.output_truncated)turn.error='本次回答达到长度上限';}
   else if(e.stage==='error')turn.error=e.message
-  else turn.events.push(e)
+  else {if(e.stage==='query')turn.status='正在理解问题';else if(e.stage==='vectors')turn.status='正在检索相关条款';else if(e.stage==='keywords')turn.status='正在核对关键词与文号';else if(e.stage==='evidence')turn.status=e.titles?.length?`已找到 ${e.titles.length} 条证据`:'未找到直接依据';else if(e.stage==='prompt')turn.status='正在起草回答';turn.events.push(e)}
  }
  try{
-  const response=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,history,run_tag:'web'}),signal:controller.signal})
+  const response=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:quoted?`针对这段原文：\n> ${quoted.replace(/\s+/g,' ').slice(0,300)}\n\n${question}`:question,history,run_tag:'web'}),signal:controller.signal})
   if(!response.ok){let message='问答请求未完成';try{message=(await response.json()).detail||message}catch{}throw new Error(message)}
   if(!response.body)throw new Error('没有收到回答数据，请重新提问')
   const reader=response.body.getReader(),decoder=new TextDecoder()
@@ -134,15 +160,20 @@ async function ask(questionOverride?:string){
   buffer+=decoder.decode();if(buffer.trim())receive(JSON.parse(buffer))
   if(!completed&&!turn.error)turn.error='连接中断，回答尚未完成，可重新提问'
  }catch(e:any){turn.error=e.name==='AbortError'?'已停止':e instanceof TypeError?'连接中断，请检查网络后重试':e.message}
- finally{if(flushTimer)clearTimeout(flushTimer);flush();busy.value=false;turn.busy=false;controller=null;persist()}
+ finally{if(flushTimer)clearTimeout(flushTimer);flush();busy.value=false;turn.busy=false;controller=null;persist();if(turn.error==='已停止')nextTick(()=>composer.value?.focus())}
 }
-async function copy(turn:Turn){try{await navigator.clipboard.writeText(turn.answer);notice('已复制')}catch{notice('请选中回答后复制')}}
+let copiedTimer:ReturnType<typeof setTimeout>|null=null
+async function copyText(text:string){
+ try{await navigator.clipboard.writeText(text);return true}catch{}
+ try{const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();const ok=document.execCommand('copy');area.remove();return ok}catch{return false}
+}
+async function copy(turn:Turn){const ok=await copyText(turn.answer);if(!ok){notice('复制失败，请手动选择文本');return}notice('已复制');copiedId.value=turn.id;if(copiedTimer)clearTimeout(copiedTimer);copiedTimer=setTimeout(()=>{copiedId.value=''},1600)}
 async function regenerate(turn:Turn){
  if(busy.value||!current.value)return
  const session=current.value,len=turnsIndex(session,turn)
  if(len<0)return
  session.turns.splice(len)  // 去掉该轮及其后内容，用剩余历史重新生成
- view.value='chat';panel.value=null;await ask(turn.question)
+ view.value='chat';panel.value=null;await ask(turn.question,turn.quote||'')
 }
 function turnsIndex(session:Session,turn:Turn){return session.turns.findIndex(t=>t.id===turn.id)}
 function selectedDocTitleOf(id?:string|null){if(!id)return '';return documents.value.find(d=>d.id===id)?.title||id}
@@ -210,6 +241,7 @@ function shortcuts(event:KeyboardEvent){
  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();paletteOpen.value?closePalette():openPalette();return}
  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='b'){event.preventDefault();toggleSidebar();return}
  if(event.key!=='Escape'||event.isComposing)return
+ if(quoteMenu.value){quoteMenu.value=null;return}
  if(paletteOpen.value){closePalette();return}
  if(uploadOpen.value&&!uploading.value){uploadOpen.value=false;return}
  if(busy.value){controller?.abort();return}
@@ -220,9 +252,9 @@ onMounted(async()=>{
  try{const saved=JSON.parse(localStorage.getItem('policy-rag-sessions')||'[]');if(Array.isArray(saved))sessions.value=saved.filter(s=>typeof s?.id==='string'&&typeof s?.title==='string'&&Array.isArray(s.turns)).slice(0,15).map(s=>({...s,turns:s.turns.filter((t:any)=>typeof t?.id==='string'&&typeof t.question==='string'&&typeof t.answer==='string').map((t:any)=>({...t,busy:false,error:t.busy?'上次回答尚未完成':t.error,sources:Array.isArray(t.sources)?t.sources.filter((v:any)=>typeof v?.doc_id==='string'&&typeof v.file==='string').map((v:any)=>({...v,pages:Array.isArray(v.pages)?v.pages.filter((p:any)=>Number.isInteger(p)&&p>0):[1]})):[],events:Array.isArray(t.events)?t.events.filter((e:any)=>typeof e?.stage==='string'&&(!e.messages||Array.isArray(e.messages))):[]}))}))
  const last=localStorage.getItem('policy-rag-session-id');const restored=sessions.value.find(s=>s.id===last)||sessions.value.find(s=>s.turns.length);if(restored){sessionId.value=restored.id;nextTick(jumpToLatest)}else newChat()
  }catch{newChat();notice('历史记录未能读取，已打开新对话')}
- document.addEventListener('visibilitychange',visibilityChanged);window.addEventListener('keydown',shortcuts);await Promise.all([loadInfo(),loadLibrary()])
+ document.addEventListener('visibilitychange',visibilityChanged);window.addEventListener('keydown',shortcuts);document.addEventListener('mouseup',selectionMenu);await Promise.all([loadInfo(),loadLibrary()])
 })
-onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();document.removeEventListener('visibilitychange',visibilityChanged);window.removeEventListener('keydown',shortcuts);if(toastTimer)clearTimeout(toastTimer)})
+onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();document.removeEventListener('visibilitychange',visibilityChanged);window.removeEventListener('keydown',shortcuts);document.removeEventListener('mouseup',selectionMenu);if(toastTimer)clearTimeout(toastTimer)})
 </script>
 
 <template>
@@ -241,16 +273,16 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
    <template v-if="view==='chat'">
     <div ref="conversation" class="conversation" @scroll="trackScroll">
      <div v-if="!current?.turns.length" class="empty-chat"><span class="empty-symbol"><Icon name="chat"/></span><h1>今天想查点什么？</h1><p class="empty-sub">制度条款、流程、时限与标准都能直接问；回答只依据现行原文，并给出出处。</p><div class="suggestions"><button v-for="q in examples" :key="q" :disabled="busy||!info?.model_ready||Boolean(connectionError)" @click="ask(q)">{{q}}<Icon name="arrow"/></button></div><p class="shortcut-hint">Enter 发送 · Shift+Enter 换行 · Ctrl K 命令面板 · Esc 停止生成</p></div>
-     <div v-else class="turn-list"><section v-for="turn in current.turns" :key="turn.id" class="turn"><div class="user-question">{{turn.question}}</div><div class="assistant-answer">
+     <div v-else class="turn-list"><section v-for="turn in current.turns" :key="turn.id" class="turn"><div class="user-question"><blockquote v-if="turn.quote" class="u-quote">{{turn.quote}}</blockquote><span class="u-text">{{turn.question}}</span></div><div class="assistant-answer">
       <details v-if="flow&&turn.events.length" class="flow-block" open><summary>检索流程<Icon name="chevron"/></summary><div v-for="(e,i) in turn.events" :key="i" class="flow-step"><span class="step-dot"></span><div><strong>{{stageLabel(e)}}</strong><p v-if="e.stage==='routing'">{{e.reason||'进入制度检索'}}</p><p v-else-if="e.stage==='query'">{{queryText(e)}}</p><template v-else-if="e.stage==='vectors'||e.stage==='keywords'"><p>{{e.passage_count||0}} 个候选片段</p><ul v-if="e.titles?.length"><li v-for="(t,j) in e.titles" :key="j">{{t.title||t}}</li></ul></template><template v-else-if="e.stage==='evidence'"><ul v-if="e.titles?.length"><li v-for="(t,j) in e.titles" :key="j">{{t.title||t}}</li></ul><p v-else>未找到匹配条目</p><p v-for="(n,j) in (e.notes||[])" :key="'n'+j">{{n}}</p></template><div v-else-if="e.stage==='prompt'" class="prompt-area"><button v-if="e.messages?.length" class="quiet-button prompt-toggle" @click="e.expanded=!e.expanded">{{e.expanded?'收起完整提示词':'展开完整提示词'}}</button><pre :class="{'complete-prompt':e.expanded}">{{e.expanded?promptFull(e):promptPreview(e)}}</pre></div></div></div></details>
       <div v-if="turn.answer" class="answer-body" :class="{streaming:turn.busy}"><MarkdownText :text="turn.answer" :sources="turn.sources" @cite="answerCite($event,turn)"/></div><div v-else-if="turn.busy" class="answer-loading"><span class="loading-dot"></span>{{turn.status||'正在查找制度'}}</div>
       <div v-if="turn.error" class="inline-error" role="status"><span>{{turn.error}}</span><button v-if="!turn.busy" class="quiet-button" :disabled="busy" @click="ask(turn.question)">重新提问</button></div>
       <div v-if="turn.sources.length" class="sources"><div class="sources-label">参考来源</div><button v-for="(s,i) in turn.sources" :key="i" :title="s.file" @click="openSource(s)"><span class="source-number">{{s.id}}</span><span class="source-name">{{s.file}}</span><span class="source-page">{{s.article?s.article+' · ':''}}第{{(s.pages||[1]).join('、')}}页</span><Icon name="chevron"/></button></div>
-      <div v-if="turn.busy" class="streaming-pill"><span class="streaming-dot"></span>{{turn.status||'正在生成回答'}}</div><div v-if="!turn.busy" class="answer-actions"><button class="icon-button" aria-label="重新生成" title="用同一上下文重新生成" :disabled="busy" @click="regenerate(turn)"><Icon name="refresh"/></button><button class="icon-button" aria-label="导出 Markdown" title="导出问题/回答/来源" @click="exportTurn(turn)"><Icon name="download"/></button><button class="icon-button" aria-label="复制回答" @click="copy(turn)"><Icon name="copy"/></button><span v-if="turn.seconds">{{turn.seconds.toFixed(1)}}秒</span></div>
+      <div v-if="turn.busy" class="streaming-pill"><span class="streaming-dot"></span>{{turn.status||'正在生成回答'}}</div><div v-if="!turn.busy" class="answer-actions"><button class="icon-button" aria-label="重新生成" title="用同一上下文重新生成" :disabled="busy" @click="regenerate(turn)"><Icon name="refresh"/></button><button class="icon-button" aria-label="导出 Markdown" title="导出问题/回答/来源" @click="exportTurn(turn)"><Icon name="download"/></button><button class="icon-button" :aria-label="copiedId===turn.id?'已复制':'复制回答'" :title="copiedId===turn.id?'已复制':'复制回答'" @click="copy(turn)"><Icon :name="copiedId===turn.id?'check':'copy'"/></button><span v-if="turn.seconds">{{turn.seconds.toFixed(1)}}秒</span></div>
      </div></section></div>
     </div>
     <button v-if="!atBottom&&current?.turns.length" class="jump-latest quiet-button" @click="jumpToLatest">{{busy?'有新内容 · 回到最新':'回到最新回答 ↓'}}</button>
-    <form class="composer-area" @submit.prevent="ask()"><div class="composer"><textarea ref="composer" v-model="input" rows="2" placeholder="输入你的问题，例如：实验室危化品怎么领用？" aria-label="问题" @keydown="keydown"></textarea><div class="composer-toolbar"><span class="composer-hint">{{busy?'Esc 可停止生成':'仅依据现行制度回答'}}</span><button v-if="busy" type="button" class="send-button" aria-label="停止回答" @click="controller?.abort()"><Icon name="stop"/></button><button v-else type="submit" class="send-button" aria-label="发送问题" :disabled="!input.trim()||!info?.model_ready||Boolean(connectionError)"><Icon name="send"/></button></div></div></form>
+    <form class="composer-area" @submit.prevent="ask()"><div class="composer"><div v-if="quote" class="quote-chip"><Icon name="chat"/><span class="quote-chip-text">{{quote}}</span><button type="button" class="quote-chip-close" aria-label="取消引用" title="取消引用" @click="clearQuote"><Icon name="close"/></button></div><textarea ref="composer" v-model="input" rows="2" placeholder="输入你的问题，例如：实验室危化品怎么领用？" aria-label="问题" @keydown="keydown"></textarea><div class="composer-toolbar"><span class="composer-hint">{{busy?'Esc 可停止生成':'仅依据现行制度回答'}}</span><button v-if="busy" type="button" class="send-button" aria-label="停止回答" @click="controller?.abort()"><Icon name="stop"/></button><button v-else type="submit" class="send-button" aria-label="发送问题" :disabled="!input.trim()||!info?.model_ready||Boolean(connectionError)"><Icon name="send"/></button></div></div></form>
    </template>
    <div v-else class="library-content"><div class="library-toolbar"><h1>资料库</h1><button class="icon-button" aria-label="刷新资料库" :disabled="libraryLoading" @click="loadLibrary"><Icon name="refresh"/></button><label class="search-box"><Icon name="search"/><input v-model="librarySearch" placeholder="查找制度、文号或部门" aria-label="查找制度"></label><select v-model="libraryStatus" class="filter-select" aria-label="按状态筛选"><option value="">全部状态</option><option value="active">现行</option><option value="superseded">已被替代</option><option value="repealed">已废止</option></select><select v-model="libraryDepartment" class="filter-select" aria-label="按部门筛选"><option value="">全部部门</option><option v-for="dep in departments" :key="dep" :value="dep">{{dep}}</option></select></div>
     <div v-if="libraryError" class="inline-error" role="status">{{libraryError}}<button class="quiet-button" :disabled="libraryLoading" @click="loadLibrary">重试</button></div>
@@ -276,6 +308,7 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
    </section>
   </div>
  </Transition>
+<button v-if="quoteMenu" class="selection-quote" :style="{left:quoteMenu.x+'px',top:quoteMenu.y+'px'}" @mousedown.prevent="useQuote"><Icon name="chat"/>追问这段</button>
 <div v-if="toast" class="toast" role="status">{{toast}}</div>
 </template>
 
@@ -343,4 +376,19 @@ onBeforeUnmount(()=>{disposed=true;controller?.abort();uploadRequest?.abort();do
  .sidebar-collapsed .status-text,.sidebar-collapsed .sidebar-bottom button{display:none}
 }
 @media(prefers-reduced-motion:reduce){.streaming-dot{animation:none}.answer-body.streaming .prose>:last-child:not(ul):not(ol)::after,.answer-body.streaming .prose>:last-child>li:last-child::after{animation:none}.palette-enter-active,.palette-leave-active,.palette-enter-active .palette,.palette-leave-active .palette{transition:none}}
+.selection-quote{position:fixed;z-index:30;transform:translateX(-50%);display:inline-flex;align-items:center;gap:6px;background:#22322a;color:#fff;border-radius:8px;padding:7px 11px;font-size:13px;box-shadow:0 8px 22px #26352a33;animation:quote-in .12s ease-out}
+.selection-quote svg{width:15px;height:15px}
+.selection-quote:hover{background:#2d4437}
+@keyframes quote-in{from{opacity:0;transform:translate(-50%,4px)}to{opacity:1;transform:translate(-50%,0)}}
+.u-quote{border-left:3px solid #c3d2c4;margin:0 0 8px;padding:2px 0 2px 11px;color:#5b6a61;font-size:14px;line-height:1.7;max-height:96px;overflow:auto;white-space:pre-wrap}
+.u-text{white-space:pre-wrap}
+.quote-chip{display:flex;align-items:center;gap:8px;background:#eef2ea;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px;color:#4f5f53}
+.quote-chip>svg{width:15px;height:15px;color:#6b7a6e;flex-shrink:0}
+.quote-chip-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.quote-chip-close{display:flex;color:#6b7a6e;padding:2px;border-radius:4px;flex-shrink:0}
+.quote-chip-close:hover{background:#dde6da}
+.prose blockquote{margin:0 0 18px;padding:9px 14px;border-left:3px solid #cfdccd;background:#f7f9f5;color:#4d5b52;border-radius:0 8px 8px 0}
+.prose blockquote p:last-child{margin-bottom:0}
+.prose table th{background:#f7f8f4;font-weight:600}
+.prose hr{border:0;border-top:1px solid var(--line);margin:26px 0}
 </style>
